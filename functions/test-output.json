@@ -3,23 +3,31 @@
     "name": "generateQuest",
     "status": "success",
     "data": {
+      "quest_type": "trivia",
+      "title": "Wilderness Survival",
+      "xp_reward": 50,
+      "location_name": "Wilderness Zone",
+      "coordinates": {
+        "lat": 48.8584,
+        "lng": 2.2945
+      },
       "question": "What is an essential skill needed to survive in the wilderness?",
       "options": [
         "Building a fire",
         "Typing fast",
         "Video gaming",
         "Sleeping"
-      ],
-      "location_name": "Wilderness Zone",
-      "coordinates": {
-        "lat": 48.8584,
-        "lng": 2.2945
-      }
+      ]
     }
   },
   {
-    "name": "submitAnswer",
+    "name": "completeQuest",
     "status": "error",
-    "error": "No active quest found for this user."
+    "error": "You have already completed a quest at this location today."
+  },
+  {
+    "name": "completeQuest_far",
+    "status": "error",
+    "error": "You have already completed a quest at this location today."
   }
 ]
