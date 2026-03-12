@@ -1,0 +1,19 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    match /active_quests/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    match /completed_quests/{documentId} {
+      // Clients cannot write directly; only read their own completed quests
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow write: if false; // Only Cloud Functions can write this
+    }
+  }
+}
