@@ -1,0 +1,25 @@
+[
+  {
+    "name": "generateQuest",
+    "status": "success",
+    "data": {
+      "question": "What is an essential skill needed to survive in the wilderness?",
+      "options": [
+        "Building a fire",
+        "Typing fast",
+        "Video gaming",
+        "Sleeping"
+      ],
+      "location_name": "Wilderness Zone",
+      "coordinates": {
+        "lat": 48.8584,
+        "lng": 2.2945
+      }
+    }
+  },
+  {
+    "name": "submitAnswer",
+    "status": "error",
+    "error": "No active quest found for this user."
+  }
+]
