@@ -45,7 +45,7 @@ function getDistanceFromLatLonInM(lat1, lon1, lat2, lon2) {
  * Stores secrets in Firestore.
  * Returns public quest info.
  */
-exports.generateQuest = onCall(async (request) => {
+exports.generateQuest = onCall({ timeoutSeconds: 120 }, async (request) => {
     if (!request.auth) {
         throw new HttpsError("unauthenticated", "User must be logged in to generate a quest.");
     }
@@ -142,26 +142,56 @@ exports.generateQuest = onCall(async (request) => {
         }
 
         // Standard Global Google Places Logic — always runs (even at hackathon, to add AI quests too)
+        // Collect IDs of already-added quests to avoid duplicates
+        const existingIds = new Set(generatedQuests.map(q => q.locationData.id));
+
         const placesUrl = `https://places.googleapis.com/v1/places:searchNearby`;
             const placesPayload = {
-                includedTypes: ["tourist_attraction", "park", "museum", "historical_landmark"],
-                maxResultCount: 3,
+                includedTypes: ["tourist_attraction", "park", "museum", "university", "hindu_temple", "church", "mosque", "library", "stadium", "shopping_mall", "restaurant", "cafe"],
+                maxResultCount: 20,
                 locationRestriction: { circle: { center: { latitude: latitude, longitude: longitude }, radius: searchRadius * 1.0 } }
             };
-            const placesResponse = await axios.post(placesUrl, placesPayload, { headers: { "X-Goog-Api-Key": placesApiKey, "X-Goog-FieldMask": "places.id,places.displayName,places.location,places.formattedAddress", "Content-Type": "application/json" } });
-            
-            const places = placesResponse.data.places;
-            if (!places || places.length === 0) {
+
+            console.log(`[generateQuest] Searching Places API with radius=${searchRadius}m, types=${placesPayload.includedTypes.join(",")}`);
+
+            let places = [];
+            try {
+                const placesResponse = await axios.post(placesUrl, placesPayload, { headers: { "X-Goog-Api-Key": placesApiKey, "X-Goog-FieldMask": "places.id,places.displayName,places.location,places.formattedAddress", "Content-Type": "application/json" } });
+                places = placesResponse.data.places || [];
+                console.log(`[generateQuest] Places API returned ${places.length} results`);
+            } catch (placesErr) {
+                console.error(`[generateQuest] Places API error: ${placesErr.response?.data?.error?.message || placesErr.message}`);
+                places = [];
+            }
+
+            if (places.length === 0 && generatedQuests.length === 0) {
                  const fallback = getFallbackQuest();
                  generatedQuests.push({ locationData: { name: fallback.location_name, id: fallback.location_id, lat: latitude, lng: longitude }, questData: fallback });
-            } else {
+            } else if (places.length > 0) {
+                // Filter out duplicates (e.g. NIT locations already added)
+                const newPlaces = places.filter(p => !existingIds.has(p.id));
+                console.log(`[generateQuest] After dedup: ${newPlaces.length} new places to process`);
+
                 const genAI = new GoogleGenerativeAI(geminiApiKey);
                 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
 
-                for (const place of places) {
+                // Enforce quest type ratio: ~3 trivia : 3 discovery : 5 exploration (out of every 11)
+                const typePattern = ["exploration", "trivia", "exploration", "discovery", "exploration", "trivia", "discovery", "exploration", "trivia", "discovery", "exploration"];
+
+                // Process places in parallel for speed
+                const questPromises = newPlaces.map(async (place, idx) => {
+                    const assignedType = typePattern[idx % typePattern.length];
                     let locData = { name: place.displayName?.text || "Unknown Location", id: place.id, lat: place.location.latitude, lng: place.location.longitude };
                     const contextText = `Location Name: ${locData.name}. Address/Vicinity: ${place.formattedAddress || 'No Address'}.`;
-                    const prompt = `You are a gamified travel app quest generator.\nGiven the following location details, randomly select ONE of three quest types: "trivia", "exploration", or "discovery".\nLocation context: ${contextText}\n\nReturn ONLY a valid JSON object.\nIf "trivia", format: {"quest_type": "trivia", "title": "...", "question": "...", "options": ["A", "B", "C", "D"], "correct_answer": "...", "xp_reward": 100}.\nIf "exploration", format: {"quest_type": "exploration", "title": "...", "description": "Cryptic clue...", "xp_reward": 75}.\nIf "discovery", format: {"quest_type": "discovery", "title": "Visit ${place.name}", "unlocked_lore": "A fascinating historical fact.", "xp_reward": 50}.`;
+                    
+                    let prompt;
+                    if (assignedType === "trivia") {
+                        prompt = `You are a gamified travel app quest generator.\nGenerate a TRIVIA quest for this location.\nLocation context: ${contextText}\n\nReturn ONLY a valid JSON object in this format:\n{"quest_type": "trivia", "title": "...", "question": "An interesting trivia question about this place", "options": ["A", "B", "C", "D"], "correct_answer": "The correct option", "xp_reward": 100}`;
+                    } else if (assignedType === "exploration") {
+                        prompt = `You are a gamified travel app quest generator.\nGenerate an EXPLORATION quest for this location. The description should be a cryptic, mysterious clue that guides the player to discover this place.\nLocation context: ${contextText}\n\nReturn ONLY a valid JSON object in this format:\n{"quest_type": "exploration", "title": "...", "description": "A cryptic, engaging clue to find this location...", "xp_reward": 75}`;
+                    } else {
+                        prompt = `You are a gamified travel app quest generator.\nGenerate a DISCOVERY quest for this location. The unlocked_lore should be a fascinating historical or cultural fact about this place.\nLocation context: ${contextText}\n\nReturn ONLY a valid JSON object in this format:\n{"quest_type": "discovery", "title": "Visit ${locData.name}", "unlocked_lore": "A fascinating historical or cultural fact about this place.", "xp_reward": 50}`;
+                    }
                     
                     let qData;
                     try {
@@ -169,11 +199,29 @@ exports.generateQuest = onCall(async (request) => {
                         let responseText = result.response.text();
                         if (responseText.startsWith("\`\`\`json")) responseText = responseText.replace(/\`\`\`json/g, "").replace(/\`\`\`/g, "").trim();
                         qData = JSON.parse(responseText);
+                        // Enforce the assigned type in case Gemini overrides it
+                        qData.quest_type = assignedType;
                     } catch (e) {
-                        qData = { quest_type: "trivia", title: `Explore ${locData.name}`, question: `What makes ${locData.name} an interesting place?`, options: ["Historical significance", "Modern architecture", "Food stalls", "Shopping"], correct_answer: "Historical significance", xp_reward: 100 };
+                        console.error(`[generateQuest] Gemini error for ${locData.name}: ${e.message}`);
+                        qData = { quest_type: assignedType, title: `Explore ${locData.name}`, xp_reward: 75 };
+                        if (assignedType === "trivia") {
+                            qData.question = `What makes ${locData.name} an interesting place?`;
+                            qData.options = ["Historical significance", "Modern architecture", "Food stalls", "Shopping"];
+                            qData.correct_answer = "Historical significance";
+                            qData.xp_reward = 100;
+                        } else if (assignedType === "exploration") {
+                            qData.description = `Find the hidden gem known as ${locData.name}. Look for clues in the surrounding area.`;
+                        } else {
+                            qData.unlocked_lore = `${locData.name} is a notable landmark in this area worth exploring.`;
+                            qData.xp_reward = 50;
+                        }
                     }
-                    generatedQuests.push({ locationData: locData, questData: qData });
-                }
+                    return { locationData: locData, questData: qData };
+                });
+
+                const results = await Promise.all(questPromises);
+                generatedQuests.push(...results);
+                console.log(`[generateQuest] Total quests generated: ${generatedQuests.length}`);
             }
 
         const clientResponses = [];
@@ -405,5 +453,40 @@ exports.getDirections = onCall(async (request) => {
     } catch (error) {
         console.error("Error fetching directions", error);
         throw new HttpsError("internal", "Failed to get directions.", error.message);
+    }
+});
+
+/**
+ * claimLoginBonus (HTTPS Callable)
+ * Awards 200 XP to users when they first sign in with Google.
+ * Uses a Firestore flag to prevent duplicate claims.
+ */
+exports.claimLoginBonus = onCall(async (request) => {
+    if (!request.auth) {
+        throw new HttpsError("unauthenticated", "User must be logged in.");
+    }
+    const uid = request.auth.uid;
+
+    try {
+        const userRef = db.collection("users").doc(uid);
+        const userDoc = await userRef.get();
+
+        if (userDoc.exists && userDoc.data().login_bonus_claimed) {
+            return { success: true, message: "Login bonus already claimed.", xp_awarded: 0 };
+        }
+
+        const currentXp = userDoc.exists ? (userDoc.data().xp || 0) : 0;
+        const bonusXp = 200;
+
+        await userRef.set({
+            xp: currentXp + bonusXp,
+            login_bonus_claimed: true,
+        }, { merge: true });
+
+        console.log(`[claimLoginBonus] Awarded ${bonusXp} XP to user ${uid}`);
+        return { success: true, message: "Login bonus claimed!", xp_awarded: bonusXp };
+    } catch (error) {
+        console.error("claimLoginBonus error:", error);
+        throw new HttpsError("internal", "Failed to claim login bonus.");
     }
 });
