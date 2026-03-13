@@ -257,7 +257,7 @@ exports.completeQuest = onCall(async (request) => {
     }
     const uid = request.auth.uid;
 
-    const { location_id, latitude, longitude, selected_answer } = request.data || {};
+    const { location_id, latitude, longitude, selected_answer, dev_mode } = request.data || {};
     if (!location_id || !latitude || !longitude) {
         throw new HttpsError("invalid-argument", "location_id, latitude, and longitude are required.");
     }
@@ -282,10 +282,12 @@ exports.completeQuest = onCall(async (request) => {
                 throw new HttpsError("invalid-argument", "Location ID does not match active quest.");
             }
 
-            // GPS Distance check — user must be within 50m of the quest location
-            const distance = getDistanceFromLatLonInM(latitude, longitude, questData.location_lat, questData.location_lng);
-            if (distance > 50) {
-                throw new HttpsError("failed-precondition", `You are too far away! (${Math.round(distance)}m). You must be within 50m of the location.`);
+            // GPS Distance check — skip if dev_mode is enabled
+            if (!dev_mode) {
+                const distance = getDistanceFromLatLonInM(latitude, longitude, questData.location_lat, questData.location_lng);
+                if (distance > 50) {
+                    throw new HttpsError("failed-precondition", `You are too far away! (${Math.round(distance)}m). You must be within 50m of the location.`);
+                }
             }
 
             // Trivia check
