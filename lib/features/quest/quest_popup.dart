@@ -5,7 +5,13 @@ import 'package:provider/provider.dart';
 import 'package:cityquest/core/theme/app_theme.dart';
 import 'package:cityquest/models/quest_node.dart';
 import 'package:cityquest/providers/user_provider.dart';
+import 'package:cityquest/providers/quest_provider.dart';
 import 'package:cityquest/features/quest/quest_answer_input.dart';
+import 'package:cityquest/services/firebase_service.dart';
+import 'package:cityquest/providers/location_provider.dart' as cityquest_loc;
+import 'package:cityquest/providers/lore_provider.dart';
+import 'package:cityquest/providers/settings_provider.dart';
+import 'package:cityquest/models/lore_entry.dart';
 
 class QuestPopup extends StatefulWidget {
   final QuestNode quest;
@@ -20,34 +26,86 @@ class _QuestPopupState extends State<QuestPopup> {
   String? _selectedAnswer;
   bool _isSubmitting = false;
   bool? _isCorrect;
+  String? _unlockedLore;
+  String? _errorMessage;
 
   void _onAnswerSelected(String answer) {
-    setState(() => _selectedAnswer = answer);
+    setState(() {
+      _selectedAnswer = answer;
+      _errorMessage = null;
+    });
   }
 
   Future<void> _submit() async {
-    if (_selectedAnswer == null) return;
+    if (widget.quest.questType == 'trivia' && _selectedAnswer == null) {
+      return;
+    }
 
-    setState(() => _isSubmitting = true);
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+    });
 
-    // Simulate backend call delay
-    await Future.delayed(const Duration(milliseconds: 800));
+    final firebaseService = FirebaseService();
+    // Use the user's actual current location
+    final locProvider = context.read<cityquest_loc.LocationProvider>();
+    final lat = locProvider.latitude;
+    final lng = locProvider.longitude;
+    final devMode = context.read<SettingsProvider>().devMode;
 
-    final correct =
-        _selectedAnswer!.trim().toLowerCase() ==
-        widget.quest.correctAnswer.trim().toLowerCase();
+    final response = await firebaseService.completeQuest(
+      locationId: widget.quest.id,
+      lat: lat,
+      lng: lng,
+      selectedAnswer: widget.quest.questType == 'trivia' ? _selectedAnswer : null,
+      devMode: devMode,
+    );
 
     if (!mounted) return;
 
-    setState(() {
-      _isSubmitting = false;
-      _isCorrect = correct;
-    });
-
-    if (correct) {
+    if (response['success'] == true) {
+      final data = response['data'] as Map<String, dynamic>;
       final userProvider = context.read<UserProvider>();
-      userProvider.addXp(widget.quest.xpReward);
+      
+      // Update UI with the dynamic reward back from the server
+      final xpGained = data['xp_earned'] ?? widget.quest.xpReward;
+      userProvider.addXp(xpGained);
       userProvider.completeQuest(widget.quest.title);
+
+      // Remove only this quest from the map markers (keep others)
+      if (mounted) {
+        context.read<QuestProvider>().removeQuest(widget.quest.id);
+      }
+
+      // Push to Lore tab in real-time
+      if (mounted) {
+        final today = DateTime.now().toIso8601String().split('T')[0];
+        context.read<LoreProvider>().addLoreEntry(LoreEntry(
+          id: widget.quest.id,
+          title: widget.quest.title,
+          locationName: widget.quest.locationName,
+          description: widget.quest.unlockedLore.isNotEmpty
+              ? widget.quest.unlockedLore
+              : widget.quest.description,
+          questType: widget.quest.questType,
+          exploredDate: today,
+          latitude: widget.quest.latitude,
+          longitude: widget.quest.longitude,
+        ));
+      }
+
+      setState(() {
+        _isSubmitting = false;
+        _isCorrect = true;
+        _unlockedLore = data['unlocked_lore'];
+      });
+    } else {
+      setState(() {
+        _isSubmitting = false;
+        // If it's a trivia wrong answer, Firebase functions generally return OK but we handled it via the backend throwing an error in this specific implementation, OR we display the standard HTTP error.
+        _isCorrect = false; 
+        _errorMessage = response['error'];
+      });
     }
   }
 
@@ -106,7 +164,7 @@ class _QuestPopupState extends State<QuestPopup> {
 
             const SizedBox(height: 24),
 
-            // ── Question ──
+            // ── Quest Content ──
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(16),
@@ -114,21 +172,72 @@ class _QuestPopupState extends State<QuestPopup> {
                 color: AppTheme.cardDark,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: AppTheme.primaryBlue.withValues(alpha: 0.3),
+                  color: widget.quest.questType == 'discovery'
+                      ? Colors.green.withValues(alpha: 0.3)
+                      : widget.quest.questType == 'exploration'
+                          ? Colors.purple.withValues(alpha: 0.3)
+                          : AppTheme.primaryBlue.withValues(alpha: 0.3),
                 ),
               ),
-              child: Text(
-                widget.quest.question,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      height: 1.5,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Quest type badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: widget.quest.questType == 'trivia'
+                          ? AppTheme.accentGold.withValues(alpha: 0.15)
+                          : widget.quest.questType == 'discovery'
+                              ? Colors.green.withValues(alpha: 0.15)
+                              : Colors.purple.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
                     ),
+                    child: Text(
+                      widget.quest.questType == 'trivia' ? '❓ Trivia'
+                          : widget.quest.questType == 'discovery' ? '📖 Discovery'
+                          : '🧭 Exploration',
+                      style: TextStyle(
+                        color: widget.quest.questType == 'trivia'
+                            ? AppTheme.accentGold
+                            : widget.quest.questType == 'discovery'
+                                ? Colors.green
+                                : Colors.purple,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  // Content based on quest type
+                  if (widget.quest.questType == 'trivia')
+                    Text(
+                      widget.quest.question,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.5),
+                    )
+                  else if (widget.quest.questType == 'discovery')
+                    Text(
+                      widget.quest.unlockedLore.isNotEmpty 
+                          ? widget.quest.unlockedLore 
+                          : widget.quest.description,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        height: 1.6,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    )
+                  else
+                    Text(
+                      widget.quest.description,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.5),
+                    ),
+                ],
               ),
             ),
 
             const SizedBox(height: 24),
 
-            // ── Answer Input ──
-            if (_isCorrect == null)
+            // ── Answer Input (Only for Trivia) ──
+            if (_isCorrect == null && widget.quest.questType == 'trivia')
               QuestAnswerInput(
                 options: widget.quest.options,
                 selectedAnswer: _selectedAnswer,
@@ -137,6 +246,19 @@ class _QuestPopupState extends State<QuestPopup> {
 
             // ── Result Message ──
             if (_isCorrect != null) _buildResult(),
+
+            if (_errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 12.0),
+                child: Text(
+                  _errorMessage!,
+                  style: const TextStyle(
+                    color: AppTheme.errorRed,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
 
             const SizedBox(height: 24),
 
@@ -147,7 +269,7 @@ class _QuestPopupState extends State<QuestPopup> {
                 height: 52,
                 child: ElevatedButton(
                   onPressed:
-                      _selectedAnswer != null && !_isSubmitting ? _submit : null,
+                      (widget.quest.questType != 'trivia' || _selectedAnswer != null) && !_isSubmitting ? _submit : null,
                   child: _isSubmitting
                       ? const SizedBox(
                           width: 22,
@@ -157,7 +279,11 @@ class _QuestPopupState extends State<QuestPopup> {
                             color: Colors.black,
                           ),
                         )
-                      : const Text('Submit Answer'),
+                      : Text(widget.quest.questType == 'trivia' 
+                          ? 'Submit Answer' 
+                          : (widget.quest.questType == 'discovery' 
+                              ? 'Check In' 
+                              : 'Claim Coordinates')),
                 ),
               )
             else
@@ -235,7 +361,7 @@ class _QuestPopupState extends State<QuestPopup> {
           ),
           const SizedBox(height: 12),
           Text(
-            _isCorrect! ? 'Correct!' : 'Incorrect!',
+            _isCorrect! ? 'Success!' : 'Failed!',
             style: GoogleFonts.montserrat(
               fontSize: 24,
               fontWeight: FontWeight.w700,
@@ -243,6 +369,22 @@ class _QuestPopupState extends State<QuestPopup> {
             ),
           ),
           const SizedBox(height: 8),
+          
+          if (_isCorrect! && _unlockedLore != null && _unlockedLore!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12.0),
+              child: Text(
+                _unlockedLore!,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 15,
+                  fontStyle: FontStyle.italic,
+                  height: 1.4,
+                ),
+              ).animate().fadeIn(duration: 500.ms).slideY(begin: 0.2, end: 0, duration: 500.ms),
+            ),
+
           if (_isCorrect!)
             Text(
               '+${widget.quest.xpReward} XP earned',
@@ -257,7 +399,7 @@ class _QuestPopupState extends State<QuestPopup> {
                 .slideY(begin: 0.5, end: 0, duration: 400.ms)
           else
             Text(
-              'The correct answer was: ${widget.quest.correctAnswer}',
+              'Attempt Failed.',
               style: TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 14,

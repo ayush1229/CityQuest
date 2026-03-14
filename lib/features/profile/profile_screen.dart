@@ -2,39 +2,96 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cityquest/core/theme/app_theme.dart';
 import 'package:cityquest/providers/user_provider.dart';
+import 'package:cityquest/services/firebase_service.dart';
 import 'package:cityquest/core/widgets/loading_widget.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  bool _isSigningIn = false;
+
+  Future<void> _handleGoogleSignIn() async {
+    setState(() => _isSigningIn = true);
+    try {
+      final firebaseService = FirebaseService();
+      final user = await firebaseService.signInWithGoogle();
+      if (user != null && mounted) {
+        // Claim 200 XP login bonus
+        await firebaseService.claimLoginBonus();
+        // Reload profile with updated data
+        context.read<UserProvider>().loadProfile(user.uid);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('🎉 Signed in! +200 XP bonus earned!'),
+            backgroundColor: AppTheme.successGreen,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sign-in failed: $e'),
+            backgroundColor: Colors.red.shade700,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+    if (mounted) setState(() => _isSigningIn = false);
+  }
+
+  bool get _isAnonymous {
+    try {
+      return FirebaseAuth.instance.currentUser?.isAnonymous ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Consumer<UserProvider>(
-      builder: (context, userProvider, _) {
-        if (userProvider.isLoading) {
-          return const LoadingWidget(message: 'Loading profile...');
-        }
+    return Scaffold(
+      backgroundColor: AppTheme.deepNavy,
+      appBar: AppBar(
+        backgroundColor: AppTheme.deepNavy,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, color: AppTheme.textPrimary),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text(
+          'EXPLORER PROFILE',
+          style: GoogleFonts.montserrat(
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 2,
+            color: AppTheme.accentGold,
+          ),
+        ),
+        centerTitle: true,
+      ),
+      body: Consumer<UserProvider>(
+        builder: (context, userProvider, _) {
+          if (userProvider.isLoading) {
+            return const LoadingWidget(message: 'Loading profile...');
+          }
 
-        final profile = userProvider.profile;
+          final profile = userProvider.profile;
 
-        return SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
             child: Column(
               children: [
-                // ── Header ──
-                Text(
-                  'Explorer Profile',
-                  style: GoogleFonts.montserrat(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.textPrimary,
-                  ),
-                ).animate().fadeIn(duration: 400.ms),
-
-                const SizedBox(height: 28),
 
                 // ── Avatar ──
                 Stack(
@@ -105,6 +162,100 @@ class ProfileScreen extends StatelessWidget {
                     profile.xpForNextLevel),
 
                 const SizedBox(height: 32),
+
+                // ── Login Card (only show if anonymous) ──
+                if (_isAnonymous) ...[
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          AppTheme.accentGold.withValues(alpha: 0.15),
+                          AppTheme.accentGold.withValues(alpha: 0.05),
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: AppTheme.accentGold.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: AppTheme.accentGold.withValues(alpha: 0.2),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.person_add_rounded, color: AppTheme.accentGold, size: 24),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Sign in to save progress',
+                                    style: GoogleFonts.montserrat(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppTheme.textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Earn +200 XP bonus!',
+                                    style: TextStyle(
+                                      color: AppTheme.accentGold,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: ElevatedButton.icon(
+                            onPressed: _isSigningIn ? null : _handleGoogleSignIn,
+                            icon: _isSigningIn
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                  )
+                                : const Icon(Icons.login_rounded, size: 20),
+                            label: Text(
+                              _isSigningIn ? 'Signing in...' : 'Sign in with Google',
+                              style: GoogleFonts.montserrat(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.accentGold,
+                              foregroundColor: Colors.black,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                              elevation: 4,
+                              shadowColor: AppTheme.accentGold.withValues(alpha: 0.3),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ).animate().fadeIn(duration: 400.ms, delay: 350.ms),
+                  const SizedBox(height: 24),
+                ],
 
                 // ── Stats Grid ──
                 Row(
@@ -195,9 +346,9 @@ class ProfileScreen extends StatelessWidget {
                 ],
               ],
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
