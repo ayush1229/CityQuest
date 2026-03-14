@@ -1,0 +1,58 @@
+name: cityquest
+description: "CityQuest - Gamified Travel Companion App"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  provider: ^6.1.2
+  geolocator: ^13.0.2
+  firebase_core: ^3.12.1
+  firebase_auth: ^5.5.1
+  cloud_firestore: ^5.6.5
+  flutter_animate: ^4.5.2
+  google_fonts: ^6.2.1
+  cloud_functions: ^5.6.2
+  google_maps_flutter: ^2.15.0
+  flutter_polyline_points: ^3.1.0
+  shared_preferences: ^2.5.4
+  google_sign_in: ^6.2.1
+  http: ^1.6.0
+  intl: ^0.20.2
+  maps_toolkit: ^3.1.0
+  camera: ^0.11.1
+  sensors_plus: ^6.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/logo/flutter_travel.jpeg"
+  adaptive_icon_background: "#1a3a5c"
+  adaptive_icon_foreground: "assets/logo/flutter_travel.jpeg"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/hospital/
+    - assets/park/
+    - assets/petrol_pump/
+    - assets/mall/
+    - assets/restaurant/
+    - assets/buildings/
+    - assets/coins/
+    - assets/Trees/
+    - assets/vehicles/
+    - assets/sparkle/
+    - assets/logo/
