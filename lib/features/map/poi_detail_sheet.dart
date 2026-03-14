@@ -42,7 +42,6 @@ class _PoiDetailSheetState extends State<PoiDetailSheet> {
 
   Future<void> _fetchLivePlaceDetails() async {
     if (widget.placeId.isEmpty || widget.placeId.startsWith('poi_')) {
-      // It's a random map click, keep the random static data logic but update state
       if (mounted) {
         setState(() {
           _poiData = _getStaticPoiData(widget.placeName);
@@ -52,7 +51,53 @@ class _PoiDetailSheetState extends State<PoiDetailSheet> {
       return;
     }
 
-    final url = 'https://places.googleapis.com/v1/places/${widget.placeId}';
+    // Check if this is a valid Google Place ID (starts with ChI or contains /)
+    final isGoogleId = widget.placeId.startsWith('ChI') || widget.placeId.contains('/');
+
+    if (isGoogleId) {
+      // ── Tier 1: Direct Place Details lookup ──
+      final success = await _fetchByPlaceId(widget.placeId);
+      if (success) return;
+    }
+
+    // ── Tier 2: Nearby Search by lat/lng ──
+    if (widget.lat != null && widget.lng != null) {
+      final nearbySuccess = await _fetchNearbyPlace(widget.lat!, widget.lng!);
+      if (nearbySuccess) return;
+    }
+
+    // ── Tier 3: Generated description card ──
+    if (mounted) {
+      setState(() {
+        _poiData = _PoiData(
+          category: 'QUEST LOCATION',
+          categoryIcon: Icons.explore,
+          priceLevel: '',
+          rating: 0,
+          reviewCount: 0,
+          isOpen: true,
+          closesAt: '',
+          hasBooking: false,
+          hasPhone: false,
+          themeColor: AppTheme.accentGold,
+          address: widget.lat != null && widget.lng != null
+              ? '${widget.lat!.toStringAsFixed(4)}, ${widget.lng!.toStringAsFixed(4)}'
+              : 'Coordinates not available',
+          phone: '',
+          website: '',
+          hours: 'Open area — visit anytime',
+          imageUrls: ['Exterior'],
+          imageLabels: ['Quest Location'],
+          reviews: [],
+        );
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Fetch place details by a known Google Place ID.
+  Future<bool> _fetchByPlaceId(String placeId) async {
+    final url = 'https://places.googleapis.com/v1/places/$placeId';
     final fields = [
       'id', 'displayName', 'formattedAddress', 'regularOpeningHours', 'businessStatus',
       'nationalPhoneNumber', 'websiteUri', 'rating', 'userRatingCount',
@@ -69,77 +114,115 @@ class _PoiDetailSheetState extends State<PoiDetailSheet> {
       );
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        
-        // Parse the live data
-        final displayName = data['displayName']?['text'] as String? ?? widget.placeName;
-        final address = data['formattedAddress'] as String? ?? 'Address not available';
-        final rating = (data['rating'] as num?)?.toDouble() ?? 0.0;
-        final reviewCount = data['userRatingCount'] as int? ?? 0;
-        final phone = data['nationalPhoneNumber'] as String? ?? '';
-        final website = data['websiteUri'] as String? ?? '';
-        final businessStatus = data['businessStatus'] as String? ?? 'OPERATIONAL';
-        final isOpen = businessStatus == 'OPERATIONAL';
-        final primaryType = data['primaryType'] as String? ?? 'Point of interest';
-        
-        // Parse opening hours
-        final hoursDict = data['regularOpeningHours'] ?? {};
-        final weekdayDescriptions = List<String>.from(hoursDict['weekdayDescriptions'] ?? []);
-        final hoursText = weekdayDescriptions.isNotEmpty ? weekdayDescriptions.take(3).join('\n') : 'Hours not available';
-
-        // Parse photos
-        final photosList = data['photos'] as List<dynamic>? ?? [];
-        final imageUrls = photosList.take(5).map((p) {
-          final photoName = p['name'] as String;
-          return 'https://places.googleapis.com/v1/$photoName/media?maxHeightPx=400&maxWidthPx=400&key=$_mapsApiKey';
-        }).toList();
-
-        // Parse reviews
-        final liveReviews = data['reviews'] as List<dynamic>? ?? [];
-        final parsedReviews = liveReviews.take(5).map((r) {
-          final author = r['authorAttribution']?['displayName'] ?? 'Google User';
-          final text = r['text']?['text'] ?? '';
-          final rRating = (r['rating'] as num?)?.toInt() ?? 5;
-          final timeStr = r['relativePublishTimeDescription'] ?? '';
-          return _ReviewData(
-            authorName: author,
-            rating: rRating,
-            text: text,
-            timeAgo: timeStr,
-            avatarColor: Colors.blueAccent, // Random color assignment handled loosely
-            photoUrl: r['authorAttribution']?['photoUri'],
-          );
-        }).toList();
-
-        if (mounted) {
-          setState(() {
-            _poiData = _PoiData(
-              category: primaryType.replaceAll('_', ' ').toUpperCase(),
-              categoryIcon: Icons.place, // fallback
-              priceLevel: data['priceLevel'] ?? '',
-              rating: rating,
-              reviewCount: reviewCount,
-              isOpen: isOpen,
-              closesAt: '', 
-              hasBooking: false,
-              hasPhone: phone.isNotEmpty,
-              themeColor: AppTheme.accentGold,
-              address: address,
-              phone: phone,
-              website: website,
-              hours: hoursText,
-              imageUrls: imageUrls.isEmpty ? ['Exterior'] : imageUrls,
-              imageLabels: imageUrls.isEmpty ? ['No Photos'] : List.generate(imageUrls.length, (i) => 'Photo ${i + 1}'),
-              reviews: parsedReviews,
-            );
-            _isLoading = false;
-          });
-        }
-      } else {
-        if (mounted) setState(() { _error = 'Failed to load place details'; _isLoading = false; });
+        _parsePlaceData(json.decode(response.body));
+        return true;
       }
     } catch (e) {
-      if (mounted) setState(() { _error = 'Network error: $e'; _isLoading = false; });
+      // Fall through to next tier
+    }
+    return false;
+  }
+
+  /// Find the nearest place by lat/lng using Nearby Search, then fetch its details.
+  Future<bool> _fetchNearbyPlace(double lat, double lng) async {
+    try {
+      final nearbyUrl = 'https://places.googleapis.com/v1/places:searchNearby';
+      final payload = json.encode({
+        'includedTypes': ['tourist_attraction', 'park', 'museum', 'restaurant', 'cafe', 'point_of_interest'],
+        'maxResultCount': 1,
+        'locationRestriction': {
+          'circle': {
+            'center': {'latitude': lat, 'longitude': lng},
+            'radius': 200.0,
+          }
+        }
+      });
+
+      final response = await http.post(
+        Uri.parse(nearbyUrl),
+        headers: {
+          'X-Goog-Api-Key': _mapsApiKey,
+          'X-Goog-FieldMask': 'places.id',
+          'Content-Type': 'application/json',
+        },
+        body: payload,
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final places = data['places'] as List<dynamic>? ?? [];
+        if (places.isNotEmpty) {
+          final foundId = places[0]['id'] as String;
+          return await _fetchByPlaceId(foundId);
+        }
+      }
+    } catch (e) {
+      // Fall through to final fallback
+    }
+    return false;
+  }
+
+  /// Parse Google Places API response into _PoiData and update state.
+  void _parsePlaceData(Map<String, dynamic> data) {
+    final displayName = data['displayName']?['text'] as String? ?? widget.placeName;
+    final address = data['formattedAddress'] as String? ?? 'Address not available';
+    final rating = (data['rating'] as num?)?.toDouble() ?? 0.0;
+    final reviewCount = data['userRatingCount'] as int? ?? 0;
+    final phone = data['nationalPhoneNumber'] as String? ?? '';
+    final website = data['websiteUri'] as String? ?? '';
+    final businessStatus = data['businessStatus'] as String? ?? 'OPERATIONAL';
+    final isOpen = businessStatus == 'OPERATIONAL';
+    final primaryType = data['primaryType'] as String? ?? 'Point of interest';
+    
+    final hoursDict = data['regularOpeningHours'] ?? {};
+    final weekdayDescriptions = List<String>.from(hoursDict['weekdayDescriptions'] ?? []);
+    final hoursText = weekdayDescriptions.isNotEmpty ? weekdayDescriptions.take(3).join('\n') : 'Hours not available';
+
+    final photosList = data['photos'] as List<dynamic>? ?? [];
+    final imageUrls = photosList.take(5).map((p) {
+      final photoName = p['name'] as String;
+      return 'https://places.googleapis.com/v1/$photoName/media?maxHeightPx=400&maxWidthPx=400&key=$_mapsApiKey';
+    }).toList();
+
+    final liveReviews = data['reviews'] as List<dynamic>? ?? [];
+    final parsedReviews = liveReviews.take(5).map((r) {
+      final author = r['authorAttribution']?['displayName'] ?? 'Google User';
+      final text = r['text']?['text'] ?? '';
+      final rRating = (r['rating'] as num?)?.toInt() ?? 5;
+      final timeStr = r['relativePublishTimeDescription'] ?? '';
+      return _ReviewData(
+        authorName: author,
+        rating: rRating,
+        text: text,
+        timeAgo: timeStr,
+        avatarColor: Colors.blueAccent,
+        photoUrl: r['authorAttribution']?['photoUri'],
+      );
+    }).toList();
+
+    if (mounted) {
+      setState(() {
+        _poiData = _PoiData(
+          category: primaryType.replaceAll('_', ' ').toUpperCase(),
+          categoryIcon: Icons.place,
+          priceLevel: data['priceLevel'] ?? '',
+          rating: rating,
+          reviewCount: reviewCount,
+          isOpen: isOpen,
+          closesAt: '', 
+          hasBooking: false,
+          hasPhone: phone.isNotEmpty,
+          themeColor: AppTheme.accentGold,
+          address: address,
+          phone: phone,
+          website: website,
+          hours: hoursText,
+          imageUrls: imageUrls.isEmpty ? ['Exterior'] : imageUrls,
+          imageLabels: imageUrls.isEmpty ? ['No Photos'] : List.generate(imageUrls.length, (i) => 'Photo ${i + 1}'),
+          reviews: parsedReviews,
+        );
+        _isLoading = false;
+      });
     }
   }
 

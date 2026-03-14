@@ -26,11 +26,21 @@ dependencies:
   http: ^1.6.0
   intl: ^0.20.2
   maps_toolkit: ^3.1.0
+  camera: ^0.11.1
+  sensors_plus: ^6.1.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/logo/flutter_travel.jpeg"
+  adaptive_icon_background: "#1a3a5c"
+  adaptive_icon_foreground: "assets/logo/flutter_travel.jpeg"
 
 flutter:
   uses-material-design: true
@@ -45,3 +55,4 @@ flutter:
     - assets/Trees/
     - assets/vehicles/
     - assets/sparkle/
+    - assets/logo/

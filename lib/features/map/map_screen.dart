@@ -13,6 +13,7 @@ import 'package:cityquest/core/theme/app_theme.dart';
 import 'package:cityquest/providers/location_provider.dart';
 import 'package:cityquest/providers/quest_provider.dart';
 import 'package:cityquest/providers/campaign_provider.dart';
+import 'package:cityquest/providers/lore_provider.dart';
 import 'package:cityquest/models/quest_node.dart';
 import 'package:cityquest/providers/settings_provider.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -25,6 +26,9 @@ import 'package:cityquest/features/quest/quests_list_screen.dart';
 import 'package:cityquest/features/lore/lore_screen.dart';
 import 'package:cityquest/features/map/poi_detail_sheet.dart';
 import 'package:cityquest/features/campaign/campaign_builder_screen.dart';
+import 'package:cityquest/features/quest/gamification_panel.dart';
+import 'package:cityquest/features/lore/achievements_screen.dart';
+import 'package:cityquest/features/lore/lore_capture_screen.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -48,6 +52,13 @@ class _MapScreenState extends State<MapScreen> {
   final Map<String, String> _poiCategories = {};
   Set<Polyline> _emergencyRoute = {};
   List<LatLng> _emergencyRoutePoints = []; // decoded street-level points
+
+  // Side quest visibility toggle
+  bool _showSideQuests = true;
+
+  // Self-location lore capture: green visited markers
+  final Set<Marker> _visitedMarkers = {};
+  bool _isCapturingLore = false;
 
   // Sparkle marquee trail (replaces breathing aura)
   BitmapDescriptor? _sparkleIcon;
@@ -109,6 +120,10 @@ class _MapScreenState extends State<MapScreen> {
           ),
         );
       };
+
+      // Load campaigns + lore from Firestore so markers appear on startup
+      cp.loadCampaigns();
+      context.read<LoreProvider>().loadLoreEntries();
     });
   }
 
@@ -386,7 +401,7 @@ class _MapScreenState extends State<MapScreen> {
       final typesToFetch = [
         'hospital', 'doctor', 'dentist', 'pharmacy', 'physiotherapist',
         'park', 'gas_station', 'shopping_mall', 'restaurant', 'cafe',
-        'school', 'bank', 'supermarket',
+        'school', 'bank', 'supermarket', 'lodging',
       ];
       final futures = typesToFetch.map((type) async {
         final url = 'https://places.googleapis.com/v1/places:searchNearby';
@@ -454,6 +469,8 @@ class _MapScreenState extends State<MapScreen> {
           category = 'mall';
         } else if (types.any((t) => t.contains('restaurant') || t.contains('cafe') || t.contains('food') || t == 'bakery' || t == 'meal_takeaway' || t == 'bar')) {
           category = 'restaurant';
+        } else if (types.any((t) => t.contains('lodging') || t.contains('hotel') || t.contains('guest_house') || t.contains('hostel') || t.contains('motel'))) {
+          category = 'lodging';
         }
         
         // Fallback: if still 'buildings', check the place NAME for keywords
@@ -468,6 +485,8 @@ class _MapScreenState extends State<MapScreen> {
             category = 'mall';
           } else if (lowerName.contains('restaurant') || lowerName.contains('cafe') || lowerName.contains('dhaba') || lowerName.contains('kitchen') || lowerName.contains('food')) {
             category = 'restaurant';
+          } else if (lowerName.contains('hotel') || lowerName.contains('lodge') || lowerName.contains('guest house') || lowerName.contains('hostel') || lowerName.contains('inn') || lowerName.contains('resort') || lowerName.contains('motel')) {
+            category = 'lodging';
           }
         }
 
@@ -543,6 +562,84 @@ class _MapScreenState extends State<MapScreen> {
             : null,
       ),
     );
+  }
+
+  /// Self-location lore capture: reverse-geocode → launch camera → save lore → green marker.
+  Future<void> _captureAtCurrentLocation(LocationProvider locProvider) async {
+    setState(() => _isCapturingLore = true);
+
+    final lat = locProvider.latitude;
+    final lng = locProvider.longitude;
+    String placeName = 'Current Location';
+    String placeId = '';
+
+    // Reverse-lookup: find a POI within 50m
+    try {
+      final url = 'https://places.googleapis.com/v1/places:searchNearby';
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': _mapsApiKey,
+          'X-Goog-FieldMask': 'places.id,places.displayName',
+        },
+        body: json.encode({
+          'maxResultCount': 1,
+          'locationRestriction': {
+            'circle': {
+              'center': {'latitude': lat, 'longitude': lng},
+              'radius': 50.0,
+            }
+          }
+        }),
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final places = data['places'] as List<dynamic>? ?? [];
+        if (places.isNotEmpty) {
+          placeName = places[0]['displayName']?['text'] ?? 'Nearby Place';
+          placeId = places[0]['id'] ?? '';
+        }
+      }
+    } catch (e) {
+      debugPrint('[LoreCapture] Reverse lookup error: $e');
+    }
+
+    setState(() => _isCapturingLore = false);
+    if (!mounted) return;
+
+    // Create a synthetic QuestNode for the lore capture screen
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final syntheticQuest = QuestNode(
+      id: 'lore_visit_$ts',
+      title: placeName,
+      description: 'A place worth remembering.',
+      latitude: lat,
+      longitude: lng,
+      questType: 'discovery',
+      xpReward: 25,
+      googlePlaceId: placeId,
+    );
+
+    // Launch lore capture
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => LoreCaptureScreen(quest: syntheticQuest)),
+    );
+
+    // Add a green marker at this location
+    if (mounted) {
+      setState(() {
+        _visitedMarkers.add(
+          Marker(
+            markerId: MarkerId('visited_$ts'),
+            position: LatLng(lat, lng),
+            icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+            zIndex: 25,
+            infoWindow: InfoWindow(title: '\u2705 $placeName', snippet: 'Lore captured'),
+          ),
+        );
+      });
+    }
   }
 
   @override
@@ -627,6 +724,14 @@ class _MapScreenState extends State<MapScreen> {
                     _navItem(Icons.menu_book_outlined, 'Lore', Colors.teal.shade300, () {
                       Navigator.pop(context);
                       Navigator.push(context, MaterialPageRoute(builder: (_) => const LoreScreen()));
+                    }),
+                    _navItem(Icons.emoji_events_rounded, 'Guild Hall', AppTheme.accentGold, () {
+                      Navigator.pop(context);
+                      GamificationPanel.show(context);
+                    }),
+                    _navItem(Icons.stars_rounded, 'Achievements', Colors.purple.shade300, () {
+                      Navigator.pop(context);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const AchievementsScreen()));
                     }),
                     _navItem(Icons.person_rounded, 'Profile', Colors.blue.shade300, () {
                       Navigator.pop(context);
@@ -739,7 +844,8 @@ class _MapScreenState extends State<MapScreen> {
 
         final Set<Marker> markers = {};
         
-        // Side quest markers (from scan)
+        // Side quest markers (from scan) — gated by toggle
+        if (_showSideQuests)
         for (final quest in questProvider.quests) {
           double hue;
           switch (quest.questType) {
@@ -806,7 +912,9 @@ class _MapScreenState extends State<MapScreen> {
                           TextButton(
                             onPressed: () {
                               Navigator.pop(ctx);
-                              _showPoiDetails(mq.id, mq.title,
+                              _showPoiDetails(
+                                  mq.googlePlaceId.isNotEmpty ? mq.googlePlaceId : mq.id,
+                                  mq.title,
                                   lat: mq.latitude, lng: mq.longitude);
                             },
                             child: const Text('View Place Info',
@@ -878,6 +986,7 @@ class _MapScreenState extends State<MapScreen> {
                         return _poiCategories[pid] == _activePoiFilter;
                       }).toSet()),
                 ...markers,
+                ..._visitedMarkers,
                 ..._buildSparkleMarkers(_magicalPointerPoints),
               },
               polylines: {...polylines, ..._emergencyRoute},
@@ -1159,6 +1268,40 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                       ),
                     ),
+                    // Side quest toggle
+                    Container(width: 1, height: 20, margin: const EdgeInsets.symmetric(horizontal: 4), color: Colors.white12),
+                    GestureDetector(
+                      onTap: () => setState(() => _showSideQuests = !_showSideQuests),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _showSideQuests ? AppTheme.accentGold.withValues(alpha: 0.15) : AppTheme.cardDark,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: _showSideQuests ? AppTheme.accentGold : Colors.white24,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _showSideQuests ? Icons.check_box : Icons.check_box_outline_blank,
+                              color: _showSideQuests ? AppTheme.accentGold : Colors.white38,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 4),
+                            Text('Quests',
+                              style: TextStyle(
+                                color: _showSideQuests ? AppTheme.accentGold : Colors.white54,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1193,6 +1336,13 @@ class _MapScreenState extends State<MapScreen> {
                       color: Colors.lightBlue,
                       category: 'petrol_pump',
                     ),
+                    const SizedBox(height: 8),
+                    _poiFilterButton(
+                      icon: Icons.hotel,
+                      label: 'Stay',
+                      color: Colors.purple.shade300,
+                      category: 'lodging',
+                    ),
                     const SizedBox(height: 12),
                   ],
                   // Main toggle button
@@ -1215,6 +1365,49 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                 ],
+              ),
+            ),
+
+            // ── Capture Lore Here Button ──
+            Positioned(
+              bottom: 24,
+              left: 16,
+              child: GestureDetector(
+                onTap: _isCapturingLore ? null : () => _captureAtCurrentLocation(locProvider),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: _isCapturingLore
+                        ? AppTheme.cardDark
+                        : AppTheme.surfaceDark.withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_isCapturingLore)
+                        const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.green),
+                        )
+                      else
+                        const Icon(Icons.add_a_photo, color: Colors.green, size: 18),
+                      const SizedBox(width: 8),
+                      Text('Capture Lore Here',
+                        style: TextStyle(color: Colors.green.shade300, fontSize: 12, fontWeight: FontWeight.w700),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
 
@@ -1438,6 +1631,27 @@ class _MapScreenState extends State<MapScreen> {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  icon: const Icon(Icons.info_outline, size: 16),
+                  label: const Text('View Place Info', style: TextStyle(fontWeight: FontWeight.w500)),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    _showPoiDetails(
+                      quest.googlePlaceId.isNotEmpty ? quest.googlePlaceId : quest.id,
+                      quest.title,
+                      lat: quest.latitude, lng: quest.longitude,
+                    );
+                  },
+                ),
               ),
             ],
           ),

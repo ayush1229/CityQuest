@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cityquest/models/campaign.dart';
 import 'package:cityquest/models/quest_node.dart';
@@ -189,6 +190,49 @@ class CampaignProvider extends ChangeNotifier {
     }
   }
 
+  /// Remove an entire level from the campaign and re-number remaining levels.
+  void removeLevel(int levelIndex) {
+    if (_activeCampaign == null) return;
+    final levels = _activeCampaign!.levels.map((l) => l.copyWith()).toList();
+    if (levelIndex < levels.length) {
+      levels.removeAt(levelIndex);
+      // Re-number
+      for (int i = 0; i < levels.length; i++) {
+        levels[i] = CampaignLevel(
+          levelNumber: i + 1,
+          destinations: levels[i].destinations,
+        );
+      }
+      _activeCampaign = _activeCampaign!.copyWith(levels: levels);
+      _recalculateOrderIndices();
+      saveDraft();
+      notifyListeners();
+    }
+  }
+
+  /// Replace a destination at a specific index within a level.
+  void replaceDestination(int levelIndex, int questIndex, QuestNode newQuest) {
+    if (_activeCampaign == null) return;
+    final levels = _activeCampaign!.levels.map((l) => l.copyWith()).toList();
+    if (levelIndex < levels.length && questIndex < levels[levelIndex].destinations.length) {
+      final tagged = newQuest.copyWith(
+        isMainQuest: true,
+        orderIndex: levels[levelIndex].destinations[questIndex].orderIndex,
+      );
+      levels[levelIndex].destinations[questIndex] = tagged;
+      _activeCampaign = _activeCampaign!.copyWith(levels: levels);
+      saveDraft();
+      notifyListeners();
+    }
+  }
+
+  /// Delete the active campaign entirely.
+  void deleteActiveCampaign() {
+    _activeCampaign = null;
+    clearDraft();
+    notifyListeners();
+  }
+
   /// Reorder a destination within a level.
   void reorderDestination(int levelIndex, int oldIdx, int newIdx) {
     if (_activeCampaign == null) return;
@@ -235,46 +279,80 @@ class CampaignProvider extends ChangeNotifier {
 
   // ─── AI Co-Pilot (Mock) ───
 
-  /// Mock AI: generates 3 themed destinations for a level after 3s delay.
-  /// [targetArea] is the name of the area the user wants to explore.
-  /// [lat]/[lng] is the starting point (from previous level's last stop or user GPS).
+  /// Generate campaign quests for a level using 3-tier AI fallback.
+  /// Calls the generateCampaignQuests Cloud Function (Gemini → OpenRouter → Hardcoded).
   Future<void> generateLevelPlan(String classType, int levelIndex, double lat, double lng, {String targetArea = ''}) async {
     _isLoading = true;
     notifyListeners();
 
-    // Simulate "Consulting the Oracle..."
-    await Future.delayed(const Duration(seconds: 3));
-
     final area = targetArea.isNotEmpty ? targetArea : 'the area';
-    final List<QuestNode> generatedQuests;
-    switch (classType) {
-      case 'adventurer':
-        generatedQuests = [
-          QuestNode(id: 'adv_${DateTime.now().millisecondsSinceEpoch}_1', title: 'Trail near $area', latitude: lat + 0.005, longitude: lng + 0.003, questType: 'exploration', description: 'Hike a scenic trail near $area.', xpReward: 120, isMainQuest: true),
-          QuestNode(id: 'adv_${DateTime.now().millisecondsSinceEpoch}_2', title: 'Hidden Falls of $area', latitude: lat + 0.008, longitude: lng - 0.002, questType: 'discovery', description: 'Discover a secluded waterfall near $area.', xpReward: 150, isMainQuest: true),
-          QuestNode(id: 'adv_${DateTime.now().millisecondsSinceEpoch}_3', title: 'Campsite beyond $area', latitude: lat - 0.003, longitude: lng + 0.006, questType: 'exploration', description: 'Set up camp at a lakeside spot past $area.', xpReward: 100, isMainQuest: true),
-        ];
-        break;
-      case 'scholar':
-        generatedQuests = [
-          QuestNode(id: 'sch_${DateTime.now().millisecondsSinceEpoch}_1', title: 'Ruins near $area', latitude: lat + 0.004, longitude: lng + 0.002, questType: 'discovery', description: 'Explore ancient ruins close to $area.', xpReward: 130, isMainQuest: true),
-          QuestNode(id: 'sch_${DateTime.now().millisecondsSinceEpoch}_2', title: '$area Heritage Museum', latitude: lat - 0.002, longitude: lng + 0.005, questType: 'trivia', description: 'Visit the museum and learn about $area history.', xpReward: 100, isMainQuest: true),
-          QuestNode(id: 'sch_${DateTime.now().millisecondsSinceEpoch}_3', title: 'War Memorial of $area', latitude: lat + 0.006, longitude: lng - 0.004, questType: 'discovery', description: 'Unlock lore at the historic memorial near $area.', xpReward: 110, isMainQuest: true),
-        ];
-        break;
-      case 'tavern_hunter':
-        generatedQuests = [
-          QuestNode(id: 'tav_${DateTime.now().millisecondsSinceEpoch}_1', title: 'Best Dhaba near $area', latitude: lat + 0.002, longitude: lng + 0.001, questType: 'exploration', description: 'Try legendary street food near $area.', xpReward: 90, isMainQuest: true),
-          QuestNode(id: 'tav_${DateTime.now().millisecondsSinceEpoch}_2', title: 'Coffee House of $area', latitude: lat - 0.001, longitude: lng + 0.004, questType: 'discovery', description: 'Sample local brews near $area.', xpReward: 80, isMainQuest: true),
-          QuestNode(id: 'tav_${DateTime.now().millisecondsSinceEpoch}_3', title: '$area Night Market', latitude: lat + 0.003, longitude: lng - 0.003, questType: 'exploration', description: 'Explore the vibrant night market of $area.', xpReward: 100, isMainQuest: true),
-        ];
-        break;
-      default:
-        generatedQuests = [];
-    }
 
-    for (final quest in generatedQuests) {
-      addDestination(levelIndex, quest);
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable(
+        'generateCampaignQuests',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 120)),
+      );
+
+      final result = await callable.call({
+        'classType': classType,
+        'latitude': lat,
+        'longitude': lng,
+        'targetArea': area,
+      });
+
+      final data = result.data as Map<String, dynamic>;
+      final questList = data['quests'] as List<dynamic>;
+
+      for (final q in questList) {
+        final quest = QuestNode(
+          id: '${classType}_${DateTime.now().millisecondsSinceEpoch}_${questList.indexOf(q)}',
+          title: q['title'] ?? 'Unknown Quest',
+          description: q['description'] ?? '',
+          latitude: (q['latitude'] as num).toDouble(),
+          longitude: (q['longitude'] as num).toDouble(),
+          questType: q['questType'] ?? 'exploration',
+          xpReward: (q['xpReward'] as num?)?.toInt() ?? 100,
+          isMainQuest: true,
+          googlePlaceId: q['googlePlaceId'] ?? '',
+        );
+        addDestination(levelIndex, quest);
+      }
+
+      print('[Oracle] ✅ Cloud Function returned ${questList.length} quests.');
+
+    } catch (e) {
+      print('[Oracle] ⚠️ Cloud Function failed, using Dart-side hardcoded fallback: $e');
+      // Dart-side hardcoded fallback
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final List<QuestNode> fallbackQuests;
+      switch (classType) {
+        case 'adventurer':
+          fallbackQuests = [
+            QuestNode(id: 'adv_${ts}_1', title: 'Trail near $area', latitude: lat + 0.005, longitude: lng + 0.003, questType: 'exploration', description: 'Hike a scenic trail near $area.', xpReward: 120, isMainQuest: true),
+            QuestNode(id: 'adv_${ts}_2', title: 'Hidden Falls of $area', latitude: lat + 0.008, longitude: lng - 0.002, questType: 'discovery', description: 'Discover a secluded waterfall near $area.', xpReward: 150, isMainQuest: true),
+            QuestNode(id: 'adv_${ts}_3', title: 'Campsite beyond $area', latitude: lat - 0.003, longitude: lng + 0.006, questType: 'exploration', description: 'Set up camp at a lakeside spot past $area.', xpReward: 100, isMainQuest: true),
+          ];
+          break;
+        case 'scholar':
+          fallbackQuests = [
+            QuestNode(id: 'sch_${ts}_1', title: 'Ruins near $area', latitude: lat + 0.004, longitude: lng + 0.002, questType: 'discovery', description: 'Explore ancient ruins close to $area.', xpReward: 130, isMainQuest: true),
+            QuestNode(id: 'sch_${ts}_2', title: '$area Heritage Museum', latitude: lat - 0.002, longitude: lng + 0.005, questType: 'trivia', description: 'Visit the museum and learn about $area history.', xpReward: 100, isMainQuest: true),
+            QuestNode(id: 'sch_${ts}_3', title: 'War Memorial of $area', latitude: lat + 0.006, longitude: lng - 0.004, questType: 'discovery', description: 'Unlock lore at the historic memorial near $area.', xpReward: 110, isMainQuest: true),
+          ];
+          break;
+        case 'tavern_hunter':
+          fallbackQuests = [
+            QuestNode(id: 'tav_${ts}_1', title: 'Best Dhaba near $area', latitude: lat + 0.002, longitude: lng + 0.001, questType: 'exploration', description: 'Try legendary street food near $area.', xpReward: 90, isMainQuest: true),
+            QuestNode(id: 'tav_${ts}_2', title: 'Coffee House of $area', latitude: lat - 0.001, longitude: lng + 0.004, questType: 'discovery', description: 'Sample local brews near $area.', xpReward: 80, isMainQuest: true),
+            QuestNode(id: 'tav_${ts}_3', title: '$area Night Market', latitude: lat + 0.003, longitude: lng - 0.003, questType: 'exploration', description: 'Explore the vibrant night market of $area.', xpReward: 100, isMainQuest: true),
+          ];
+          break;
+        default:
+          fallbackQuests = [];
+      }
+      for (final quest in fallbackQuests) {
+        addDestination(levelIndex, quest);
+      }
     }
 
     _isLoading = false;

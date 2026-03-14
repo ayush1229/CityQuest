@@ -12,6 +12,8 @@ import 'package:cityquest/providers/location_provider.dart' as cityquest_loc;
 import 'package:cityquest/providers/lore_provider.dart';
 import 'package:cityquest/providers/settings_provider.dart';
 import 'package:cityquest/models/lore_entry.dart';
+import 'package:cityquest/features/quest/ar_capture_screen.dart';
+import 'package:cityquest/features/lore/lore_capture_screen.dart';
 
 class QuestPopup extends StatefulWidget {
   final QuestNode quest;
@@ -286,22 +288,143 @@ class _QuestPopupState extends State<QuestPopup> {
                               : 'Claim Coordinates')),
                 ),
               )
-            else
+            else if (_isCorrect == true) ...[
+              // ── Discovery: Lore Capture only ──
+              if (widget.quest.questType == 'discovery' && !widget.quest.isMainQuest)
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accentGold,
+                      foregroundColor: AppTheme.deepNavy,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    ),
+                    icon: const Icon(Icons.menu_book, size: 20),
+                    label: Text('Capture Memory!',
+                      style: GoogleFonts.montserrat(fontWeight: FontWeight.w800, fontSize: 15),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => LoreCaptureScreen(quest: widget.quest)),
+                      );
+                    },
+                  ),
+                ),
+
+              // ── Exploration: AR Capture only ──
+              if (widget.quest.questType == 'exploration' && !widget.quest.isMainQuest)
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accentGold,
+                      foregroundColor: AppTheme.deepNavy,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    ),
+                    icon: const Icon(Icons.camera_alt_rounded, size: 20),
+                    label: Text('Capture Artifact!',
+                      style: GoogleFonts.montserrat(fontWeight: FontWeight.w800, fontSize: 15),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => ArCaptureScreen(quest: widget.quest)),
+                      );
+                    },
+                  ),
+                ),
+
+              // ── Trivia (side): AR Capture ──
+              if (widget.quest.questType == 'trivia' && !widget.quest.isMainQuest)
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accentGold,
+                      foregroundColor: AppTheme.deepNavy,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    ),
+                    icon: const Icon(Icons.camera_alt_rounded, size: 20),
+                    label: Text('Capture Artifact!',
+                      style: GoogleFonts.montserrat(fontWeight: FontWeight.w800, fontSize: 15),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => ArCaptureScreen(quest: widget.quest)),
+                      );
+                    },
+                  ),
+                ),
+
+              // ── Main Quest: Both Lore + AR (mandatory) ──
+              if (widget.quest.isMainQuest)
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accentGold,
+                      foregroundColor: AppTheme.deepNavy,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                    ),
+                    icon: const Icon(Icons.auto_stories, size: 20),
+                    label: Text('Capture Memory & Artifact!',
+                      style: GoogleFonts.montserrat(fontWeight: FontWeight.w800, fontSize: 14),
+                    ),
+                    onPressed: () async {
+                      Navigator.of(context).pop();
+                      // Step 1: Lore capture (mandatory)
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => LoreCaptureScreen(quest: widget.quest)),
+                      );
+                      // Step 2: AR capture (mandatory) — opens immediately after lore
+                      if (context.mounted) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => ArCaptureScreen(quest: widget.quest)),
+                        );
+                      }
+                    },
+                  ),
+                ),
+
+              // Skip option — only for side quests
+              if (!widget.quest.isMainQuest) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  height: 40,
+                  child: TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text('Skip',
+                      style: GoogleFonts.poppins(color: AppTheme.textSecondary, fontSize: 13),
+                    ),
+                  ),
+                ),
+              ],
+            ]
+            // ── Failed attempt: show close/retry button ──
+            else if (_isCorrect == false) ...[
               SizedBox(
                 width: double.infinity,
                 height: 52,
-                child: OutlinedButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppTheme.accentGold,
-                    side: const BorderSide(color: AppTheme.accentGold),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.cardDark,
+                    foregroundColor: AppTheme.textPrimary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                   ),
-                  child: const Text('Close'),
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text('Close',
+                    style: GoogleFonts.montserrat(fontWeight: FontWeight.w700, fontSize: 15),
+                  ),
                 ),
               ),
+            ],
 
             const SizedBox(height: 12),
 

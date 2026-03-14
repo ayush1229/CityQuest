@@ -8,6 +8,7 @@ class LoreEntry {
   final double latitude;
   final double longitude;
   final bool isHardcoded;
+  final String imagePath;
 
   LoreEntry({
     required this.id,
@@ -19,6 +20,7 @@ class LoreEntry {
     this.latitude = 0.0,
     this.longitude = 0.0,
     this.isHardcoded = false,
+    this.imagePath = '',
   });
 
   factory LoreEntry.fromFirestore(Map<String, dynamic> data) {

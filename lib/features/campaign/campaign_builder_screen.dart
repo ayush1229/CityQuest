@@ -165,6 +165,95 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
     );
   }
 
+  void _confirmDeleteLevel(int levelIndex, CampaignProvider provider) {
+    final level = provider.activeCampaign!.levels[levelIndex];
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Delete Level ${level.levelNumber}?',
+          style: const TextStyle(color: AppTheme.accentGold, fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          level.destinations.isEmpty
+              ? 'This empty level will be removed.'
+              : 'This will delete Level ${level.levelNumber} and its ${level.destinations.length} stop${level.destinations.length == 1 ? '' : 's'}.',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              provider.removeLevel(levelIndex);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editDestination(int levelIndex, int questIndex) async {
+    final cp = context.read<CampaignProvider>();
+    final existingQuest = cp.activeCampaign!.levels[levelIndex].destinations[questIndex];
+
+    final result = await showModalBottomSheet<QuestNode>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _PlaceSearchSheet(
+        previousStopLat: existingQuest.latitude,
+        previousStopLng: existingQuest.longitude,
+        previousStopName: existingQuest.title,
+      ),
+    );
+    if (result != null && mounted) {
+      cp.replaceDestination(levelIndex, questIndex, result);
+    }
+  }
+
+  void _confirmDeleteCampaign() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('⚠️ Delete Campaign?',
+          style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w700),
+        ),
+        content: const Text(
+          'This will permanently delete your entire campaign, including all levels and stops. This action cannot be undone.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              context.read<CampaignProvider>().deleteActiveCampaign();
+              setState(() {
+                _isCreated = false;
+                _titleController.clear();
+                _dateRange = null;
+              });
+            },
+            child: const Text('Delete Forever',
+              style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _forgeCampaign() async {
     final provider = context.read<CampaignProvider>();
     if (provider.activeCampaign == null) return;
@@ -257,6 +346,32 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                         ),
                       ),
                     ).animate().fadeIn(duration: 300.ms),
+                    // Delete Campaign button
+                    const SizedBox(height: 8),
+                    GestureDetector(
+                      onTap: _confirmDeleteCampaign,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.redAccent.withValues(alpha: 0.25)),
+                          borderRadius: BorderRadius.circular(14),
+                          color: Colors.redAccent.withValues(alpha: 0.05),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.delete_forever, size: 18, color: Colors.redAccent.withValues(alpha: 0.6)),
+                            const SizedBox(width: 8),
+                            Text('DELETE CAMPAIGN',
+                              style: GoogleFonts.montserrat(
+                                fontSize: 12, fontWeight: FontWeight.w700,
+                                letterSpacing: 1.5, color: Colors.redAccent.withValues(alpha: 0.6),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ],
               ),
@@ -495,6 +610,11 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                       Text('${level.destinations.length} stops',
                         style: const TextStyle(color: Colors.white38, fontSize: 11),
                       ),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () => _confirmDeleteLevel(levelIndex, provider),
+                        child: Icon(Icons.delete_outline, size: 18, color: Colors.red.withValues(alpha: 0.5)),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -570,8 +690,11 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                                   ],
                                 ),
                               ),
-                              const Icon(Icons.map_outlined, size: 14, color: Colors.white30),
-                              const SizedBox(width: 6),
+                              GestureDetector(
+                                onTap: () => _editDestination(levelIndex, qIndex),
+                                child: Icon(Icons.edit_outlined, size: 14, color: AppTheme.accentGold.withValues(alpha: 0.5)),
+                              ),
+                              const SizedBox(width: 8),
                               Text('+${quest.xpReward} XP',
                                 style: TextStyle(color: AppTheme.accentGold.withValues(alpha: 0.7), fontSize: 11, fontWeight: FontWeight.w600),
                               ),
@@ -741,6 +864,11 @@ class _ClassSelectionSheet extends StatefulWidget {
 
 class _ClassSelectionSheetState extends State<_ClassSelectionSheet> {
   late final TextEditingController _areaController;
+  static const String _mapsApiKey = 'AIzaSyCZ7KPFxLqOCfTPHwumDcZyNpOcYJAHYf8';
+  List<Map<String, dynamic>> _suggestions = [];
+  double? _selectedLat;
+  double? _selectedLng;
+  bool _isSearching = false;
 
   @override
   void initState() {
@@ -749,6 +877,8 @@ class _ClassSelectionSheetState extends State<_ClassSelectionSheet> {
     _areaController = TextEditingController(
       text: widget.previousStopName ?? '',
     );
+    _selectedLat = widget.previousStopLat;
+    _selectedLng = widget.previousStopLng;
   }
 
   @override
@@ -757,11 +887,82 @@ class _ClassSelectionSheetState extends State<_ClassSelectionSheet> {
     super.dispose();
   }
 
+  Future<void> _searchPlaces(String query) async {
+    if (query.trim().length < 2) {
+      setState(() => _suggestions = []);
+      return;
+    }
+
+    final loc = context.read<LocationProvider>();
+    final Map<String, dynamic> requestBody = {'input': query};
+
+    if (loc.latitude != 0.0 && loc.longitude != 0.0) {
+      requestBody['locationBias'] = {
+        'circle': {
+          'center': {'latitude': loc.latitude, 'longitude': loc.longitude},
+          'radius': 50000.0,
+        }
+      };
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse('https://places.googleapis.com/v1/places:autocomplete'),
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': _mapsApiKey,
+        },
+        body: json.encode(requestBody),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data.containsKey('suggestions') && mounted) {
+          setState(() {
+            _suggestions = List<Map<String, dynamic>>.from(data['suggestions']);
+          });
+        } else if (mounted) {
+          setState(() => _suggestions = []);
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _selectSuggestion(String placeId, String displayName) async {
+    _areaController.text = displayName;
+    setState(() {
+      _suggestions = [];
+      _isSearching = true;
+    });
+
+    // Fetch lat/lng from Places API
+    try {
+      final response = await http.get(
+        Uri.parse('https://places.googleapis.com/v1/places/$placeId'),
+        headers: {
+          'X-Goog-Api-Key': _mapsApiKey,
+          'X-Goog-FieldMask': 'location',
+        },
+      );
+
+      if (response.statusCode == 200 && mounted) {
+        final data = json.decode(response.body);
+        if (data.containsKey('location')) {
+          setState(() {
+            _selectedLat = data['location']['latitude'];
+            _selectedLng = data['location']['longitude'];
+          });
+        }
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _isSearching = false);
+  }
+
   void _selectClass(String classType) {
     final loc = context.read<LocationProvider>();
-    // Use previous stop coords as starting point, fallback to user GPS
-    final lat = widget.previousStopLat ?? loc.latitude;
-    final lng = widget.previousStopLng ?? loc.longitude;
+    // Use selected place coords, or previous stop, or user GPS
+    final lat = _selectedLat ?? widget.previousStopLat ?? loc.latitude;
+    final lng = _selectedLng ?? widget.previousStopLng ?? loc.longitude;
     widget.onClassSelected(classType, _areaController.text.trim(), lat, lng);
   }
 
@@ -804,6 +1005,7 @@ class _ClassSelectionSheetState extends State<_ClassSelectionSheet> {
               child: TextField(
                 controller: _areaController,
                 style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+                onChanged: _searchPlaces,
                 decoration: InputDecoration(
                   labelText: 'TARGET DESTINATION / AREA',
                   labelStyle: GoogleFonts.montserrat(
@@ -813,12 +1015,89 @@ class _ClassSelectionSheetState extends State<_ClassSelectionSheet> {
                   hintText: 'e.g. Shimla, Old Town, NIT Campus...',
                   hintStyle: const TextStyle(color: Colors.white24, fontSize: 13),
                   prefixIcon: const Icon(Icons.location_on, color: AppTheme.accentGold, size: 20),
+                  suffixIcon: _isSearching
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: SizedBox(width: 16, height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accentGold)),
+                        )
+                      : (_areaController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, size: 18, color: Colors.white30),
+                              onPressed: () {
+                                _areaController.clear();
+                                setState(() {
+                                  _suggestions = [];
+                                  _selectedLat = null;
+                                  _selectedLng = null;
+                                });
+                              },
+                            )
+                          : null),
                   border: InputBorder.none,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
                 ),
               ),
             ),
-            if (widget.previousStopName != null)
+
+            // Autocomplete suggestions dropdown
+            if (_suggestions.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(top: 4),
+                constraints: const BoxConstraints(maxHeight: 180),
+                decoration: BoxDecoration(
+                  color: AppTheme.cardDark,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.accentGold.withValues(alpha: 0.15)),
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  itemCount: _suggestions.length,
+                  separatorBuilder: (_, __) => Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
+                  itemBuilder: (context, index) {
+                    final suggestion = _suggestions[index];
+                    final placePrediction = suggestion['placePrediction'];
+                    if (placePrediction == null) return const SizedBox.shrink();
+                    final displayName = placePrediction['text']?['text'] ?? '';
+                    final placeId = placePrediction['placeId'] ?? '';
+                    final structuredFormat = placePrediction['structuredFormat'];
+                    final mainText = structuredFormat?['mainText']?['text'] ?? displayName;
+                    final secondaryText = structuredFormat?['secondaryText']?['text'] ?? '';
+
+                    return InkWell(
+                      onTap: () => _selectSuggestion(placeId, mainText),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        child: Row(
+                          children: [
+                            Icon(Icons.place, size: 18, color: AppTheme.accentGold.withValues(alpha: 0.6)),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(mainText,
+                                    style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13, fontWeight: FontWeight.w500),
+                                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (secondaryText.isNotEmpty)
+                                    Text(secondaryText,
+                                      style: const TextStyle(color: Colors.white38, fontSize: 11),
+                                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+
+            if (widget.previousStopName != null && _suggestions.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6, left: 4),
                 child: Row(

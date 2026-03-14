@@ -23,6 +23,7 @@ class QuestNode {
   // Campaign Builder fields
   final bool isMainQuest;  // true = campaign destination, false = scanned side quest
   final int orderIndex;     // sequential order for polyline connection
+  final String googlePlaceId; // Google Places API ID for place info lookup
   
   // Helpers
   LatLng get coordinates => LatLng(latitude, longitude);
@@ -43,6 +44,7 @@ class QuestNode {
     this.xpReward = 50,
     this.isMainQuest = false,
     this.orderIndex = 0,
+    this.googlePlaceId = '',
   });
 
   factory QuestNode.fromFirestore(DocumentSnapshot doc) {
@@ -62,6 +64,7 @@ class QuestNode {
       xpReward: data['xp_reward'] ?? 50,
       isMainQuest: data['is_main_quest'] ?? false,
       orderIndex: data['order_index'] ?? 0,
+      googlePlaceId: data['google_place_id'] ?? '',
     );
   }
 
@@ -91,6 +94,7 @@ class QuestNode {
       xpReward: data['xp_reward'] ?? 50,
       isMainQuest: data['is_main_quest'] ?? false,
       orderIndex: data['order_index'] ?? 0,
+      googlePlaceId: data['google_place_id'] ?? data['googlePlaceId'] ?? '',
     );
   }
 
@@ -109,6 +113,7 @@ class QuestNode {
     int? xpReward,
     bool? isMainQuest,
     int? orderIndex,
+    String? googlePlaceId,
   }) {
     return QuestNode(
       id: id ?? this.id,
@@ -125,6 +130,7 @@ class QuestNode {
       xpReward: xpReward ?? this.xpReward,
       isMainQuest: isMainQuest ?? this.isMainQuest,
       orderIndex: orderIndex ?? this.orderIndex,
+      googlePlaceId: googlePlaceId ?? this.googlePlaceId,
     );
   }
 
@@ -144,6 +150,7 @@ class QuestNode {
       'xp_reward': xpReward,
       'is_main_quest': isMainQuest,
       'order_index': orderIndex,
+      'google_place_id': googlePlaceId,
     };
   }
 }
