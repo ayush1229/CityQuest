@@ -7,6 +7,7 @@ class QuestNode {
   final double latitude;
   final double longitude;
   bool isUnlocked;
+  bool isCompleted;
   
   // New Dynamic Quest Fields
   final String questType;
@@ -22,14 +23,10 @@ class QuestNode {
   // Campaign Builder fields
   final bool isMainQuest;  // true = campaign destination, false = scanned side quest
   final int orderIndex;     // sequential order for polyline connection
-  final DateTime? activationDate; // time-gate: quest unlocks on this date
   
   // Helpers
   LatLng get coordinates => LatLng(latitude, longitude);
   String get locationName => title;
-  bool get isLocked => activationDate != null && DateTime.now().isBefore(
-    DateTime(activationDate!.year, activationDate!.month, activationDate!.day),
-  );
 
   QuestNode({
     required this.id,
@@ -37,6 +34,7 @@ class QuestNode {
     required this.latitude,
     required this.longitude,
     this.isUnlocked = false,
+    this.isCompleted = false,
     this.questType = 'trivia',
     this.description = '',
     this.unlockedLore = '',
@@ -45,7 +43,6 @@ class QuestNode {
     this.xpReward = 50,
     this.isMainQuest = false,
     this.orderIndex = 0,
-    this.activationDate,
   });
 
   factory QuestNode.fromFirestore(DocumentSnapshot doc) {
@@ -56,6 +53,7 @@ class QuestNode {
       latitude: (data['latitude'] ?? 0).toDouble(),
       longitude: (data['longitude'] ?? 0).toDouble(),
       isUnlocked: data['isUnlocked'] ?? false,
+      isCompleted: data['is_completed'] ?? false,
       questType: data['quest_type'] ?? 'trivia',
       description: data['description'] ?? '',
       unlockedLore: data['unlocked_lore'] ?? '',
@@ -64,9 +62,6 @@ class QuestNode {
       xpReward: data['xp_reward'] ?? 50,
       isMainQuest: data['is_main_quest'] ?? false,
       orderIndex: data['order_index'] ?? 0,
-      activationDate: data['activation_date'] != null
-          ? (data['activation_date'] as Timestamp).toDate()
-          : null,
     );
   }
 
@@ -78,8 +73,8 @@ class QuestNode {
       lat = (data['coordinates']['lat'] ?? 0).toDouble();
       lng = (data['coordinates']['lng'] ?? 0).toDouble();
     } else {
-      lat = (data['location_lat'] ?? 0).toDouble();
-      lng = (data['location_lng'] ?? 0).toDouble();
+      lat = (data['location_lat'] ?? data['latitude'] ?? 0).toDouble();
+      lng = (data['location_lng'] ?? data['longitude'] ?? 0).toDouble();
     }
 
     return QuestNode(
@@ -87,6 +82,7 @@ class QuestNode {
       title: data['title'] ?? data['location_name'] ?? 'Mystery Quest',
       latitude: lat,
       longitude: lng,
+      isCompleted: data['is_completed'] ?? false,
       questType: data['quest_type'] ?? 'trivia',
       description: data['description'] ?? '',
       unlockedLore: data['unlocked_lore'] ?? '',
@@ -95,9 +91,6 @@ class QuestNode {
       xpReward: data['xp_reward'] ?? 50,
       isMainQuest: data['is_main_quest'] ?? false,
       orderIndex: data['order_index'] ?? 0,
-      activationDate: data['activation_date'] != null
-          ? DateTime.tryParse(data['activation_date'])
-          : null,
     );
   }
 
@@ -107,6 +100,7 @@ class QuestNode {
     double? latitude,
     double? longitude,
     bool? isUnlocked,
+    bool? isCompleted,
     String? questType,
     String? description,
     String? unlockedLore,
@@ -115,7 +109,6 @@ class QuestNode {
     int? xpReward,
     bool? isMainQuest,
     int? orderIndex,
-    DateTime? activationDate,
   }) {
     return QuestNode(
       id: id ?? this.id,
@@ -123,6 +116,7 @@ class QuestNode {
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
       isUnlocked: isUnlocked ?? this.isUnlocked,
+      isCompleted: isCompleted ?? this.isCompleted,
       questType: questType ?? this.questType,
       description: description ?? this.description,
       unlockedLore: unlockedLore ?? this.unlockedLore,
@@ -131,7 +125,6 @@ class QuestNode {
       xpReward: xpReward ?? this.xpReward,
       isMainQuest: isMainQuest ?? this.isMainQuest,
       orderIndex: orderIndex ?? this.orderIndex,
-      activationDate: activationDate ?? this.activationDate,
     );
   }
 
@@ -142,6 +135,7 @@ class QuestNode {
       'latitude': latitude,
       'longitude': longitude,
       'isUnlocked': isUnlocked,
+      'is_completed': isCompleted,
       'quest_type': questType,
       'description': description,
       'unlocked_lore': unlockedLore,
@@ -150,7 +144,6 @@ class QuestNode {
       'xp_reward': xpReward,
       'is_main_quest': isMainQuest,
       'order_index': orderIndex,
-      'activation_date': activationDate?.toIso8601String(),
     };
   }
 }

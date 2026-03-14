@@ -1,49 +1,55 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cityquest/models/quest_node.dart';
 
-/// Represents a single day in a campaign itinerary.
-class DayPlan {
-  final int dayNumber;
+/// Represents a single level in a campaign progression.
+/// Level N is locked until all quests in Level N-1 are completed.
+class CampaignLevel {
+  final int levelNumber;
   final List<QuestNode> destinations;
 
-  DayPlan({
-    required this.dayNumber,
+  CampaignLevel({
+    required this.levelNumber,
     List<QuestNode>? destinations,
   }) : destinations = destinations ?? [];
 
+  /// True only if every quest in this level has isCompleted == true
+  /// and the level has at least one quest.
+  bool get isCompleted =>
+      destinations.isNotEmpty && destinations.every((q) => q.isCompleted);
+
   Map<String, dynamic> toMap() {
     return {
-      'day_number': dayNumber,
+      'level_number': levelNumber,
       'destinations': destinations.map((d) => d.toMap()).toList(),
     };
   }
 
-  factory DayPlan.fromMap(Map<String, dynamic> data) {
+  factory CampaignLevel.fromMap(Map<String, dynamic> data) {
     final destList = data['destinations'] as List<dynamic>? ?? [];
-    return DayPlan(
-      dayNumber: data['day_number'] ?? 1,
+    return CampaignLevel(
+      levelNumber: data['level_number'] ?? 1,
       destinations: destList
           .map((d) => QuestNode.fromJson(Map<String, dynamic>.from(d)))
           .toList(),
     );
   }
 
-  DayPlan copyWith({int? dayNumber, List<QuestNode>? destinations}) {
-    return DayPlan(
-      dayNumber: dayNumber ?? this.dayNumber,
+  CampaignLevel copyWith({int? levelNumber, List<QuestNode>? destinations}) {
+    return CampaignLevel(
+      levelNumber: levelNumber ?? this.levelNumber,
       destinations: destinations ?? List.from(this.destinations),
     );
   }
 }
 
-/// Represents a full multi-day campaign (trip itinerary).
+/// Represents a full multi-level campaign (trip itinerary).
 class Campaign {
   final String id;
   final String userId;
   final String title;
   final DateTime startDate;
   final DateTime endDate;
-  final List<DayPlan> days;
+  final List<CampaignLevel> levels;
   final DateTime createdAt;
 
   Campaign({
@@ -52,19 +58,19 @@ class Campaign {
     required this.title,
     required this.startDate,
     required this.endDate,
-    required this.days,
+    required this.levels,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
-  /// Total number of destinations across all days.
+  /// Total number of destinations across all levels.
   int get totalDestinations =>
-      days.fold(0, (sum, day) => sum + day.destinations.length);
+      levels.fold(0, (sum, level) => sum + level.destinations.length);
 
   /// All main quest nodes flattened, sorted by orderIndex.
   List<QuestNode> get allMainQuests {
     final quests = <QuestNode>[];
-    for (final day in days) {
-      quests.addAll(day.destinations);
+    for (final level in levels) {
+      quests.addAll(level.destinations);
     }
     quests.sort((a, b) => a.orderIndex.compareTo(b.orderIndex));
     return quests;
@@ -76,21 +82,21 @@ class Campaign {
       'title': title,
       'start_date': Timestamp.fromDate(startDate),
       'end_date': Timestamp.fromDate(endDate),
-      'days': days.map((d) => d.toMap()).toList(),
+      'levels': levels.map((l) => l.toMap()).toList(),
       'created_at': Timestamp.fromDate(createdAt),
     };
   }
 
   factory Campaign.fromMap(String docId, Map<String, dynamic> data) {
-    final daysList = data['days'] as List<dynamic>? ?? [];
+    final levelsList = data['levels'] as List<dynamic>? ?? [];
     return Campaign(
       id: docId,
       userId: data['user_id'] ?? '',
       title: data['title'] ?? 'Untitled Campaign',
       startDate: (data['start_date'] as Timestamp?)?.toDate() ?? DateTime.now(),
       endDate: (data['end_date'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      days: daysList
-          .map((d) => DayPlan.fromMap(Map<String, dynamic>.from(d)))
+      levels: levelsList
+          .map((l) => CampaignLevel.fromMap(Map<String, dynamic>.from(l)))
           .toList(),
       createdAt: (data['created_at'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
@@ -102,7 +108,7 @@ class Campaign {
     String? title,
     DateTime? startDate,
     DateTime? endDate,
-    List<DayPlan>? days,
+    List<CampaignLevel>? levels,
   }) {
     return Campaign(
       id: id ?? this.id,
@@ -110,7 +116,7 @@ class Campaign {
       title: title ?? this.title,
       startDate: startDate ?? this.startDate,
       endDate: endDate ?? this.endDate,
-      days: days ?? this.days.map((d) => d.copyWith()).toList(),
+      levels: levels ?? this.levels.map((l) => l.copyWith()).toList(),
       createdAt: createdAt,
     );
   }
@@ -123,21 +129,21 @@ class Campaign {
       'title': title,
       'start_date': startDate.toIso8601String(),
       'end_date': endDate.toIso8601String(),
-      'days': days.map((d) => d.toMap()).toList(),
+      'levels': levels.map((l) => l.toMap()).toList(),
       'created_at': createdAt.toIso8601String(),
     };
   }
 
   factory Campaign.fromJson(Map<String, dynamic> data) {
-    final daysList = data['days'] as List<dynamic>? ?? [];
+    final levelsList = data['levels'] as List<dynamic>? ?? [];
     return Campaign(
       id: data['id'] ?? '',
       userId: data['user_id'] ?? '',
       title: data['title'] ?? 'Untitled Campaign',
       startDate: DateTime.tryParse(data['start_date'] ?? '') ?? DateTime.now(),
       endDate: DateTime.tryParse(data['end_date'] ?? '') ?? DateTime.now(),
-      days: daysList
-          .map((d) => DayPlan.fromMap(Map<String, dynamic>.from(d)))
+      levels: levelsList
+          .map((l) => CampaignLevel.fromMap(Map<String, dynamic>.from(l)))
           .toList(),
       createdAt: DateTime.tryParse(data['created_at'] ?? '') ?? DateTime.now(),
     );

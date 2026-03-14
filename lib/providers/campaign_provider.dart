@@ -64,21 +64,34 @@ class CampaignProvider extends ChangeNotifier {
   List<QuestNode> get mainQuests =>
       _activeCampaign?.allMainQuests ?? [];
 
-  // ─── Context Helpers ───
+  // ─── Level Helpers ───
 
-  /// Get the last destination from a given day (null if day is empty or invalid).
-  QuestNode? getLastDestinationOfDay(int dayIndex) {
+  /// Get the last destination from a given level (null if level is empty or invalid).
+  QuestNode? getLastDestinationOfLevel(int levelIndex) {
     if (_activeCampaign == null) return null;
-    if (dayIndex < 0 || dayIndex >= _activeCampaign!.days.length) return null;
-    final dests = _activeCampaign!.days[dayIndex].destinations;
+    if (levelIndex < 0 || levelIndex >= _activeCampaign!.levels.length) return null;
+    final dests = _activeCampaign!.levels[levelIndex].destinations;
     return dests.isNotEmpty ? dests.last : null;
   }
 
-  /// Get the last destination from the previous day (Day N-1).
-  /// Returns null for Day 0 or if previous day has no stops.
-  QuestNode? getPreviousDayLastStop(int currentDayIndex) {
-    if (currentDayIndex <= 0) return null;
-    return getLastDestinationOfDay(currentDayIndex - 1);
+  /// Get the last destination from the previous level (Level N-1).
+  /// Returns null for Level 0 or if previous level has no stops.
+  QuestNode? getPreviousLevelLastStop(int currentLevelIndex) {
+    if (currentLevelIndex <= 0) return null;
+    return getLastDestinationOfLevel(currentLevelIndex - 1);
+  }
+
+  /// Returns the lowest incomplete level number (1-indexed).
+  /// If all levels are complete, returns the last level number + 1.
+  int getActiveLevel() {
+    if (_activeCampaign == null) return 1;
+    for (final level in _activeCampaign!.levels) {
+      if (!level.isCompleted) return level.levelNumber;
+    }
+    // All complete — return next level
+    return (_activeCampaign!.levels.isEmpty)
+        ? 1
+        : _activeCampaign!.levels.last.levelNumber + 1;
   }
 
   /// Mock: generate 5 nearby QuestNode suggestions around a given point.
@@ -95,21 +108,15 @@ class CampaignProvider extends ChangeNotifier {
 
   // ─── Campaign CRUD ───
 
-  /// Create a new empty campaign with day slots.
+  /// Create a new campaign with a single empty Level 1.
   void createCampaign(String title, DateTime startDate, DateTime endDate) {
-    final dayCount = endDate.difference(startDate).inDays + 1;
-    final days = List.generate(
-      dayCount,
-      (i) => DayPlan(dayNumber: i + 1),
-    );
-
     _activeCampaign = Campaign(
-      id: '', // Will be set on Firestore save
+      id: '',
       userId: '',
       title: title,
       startDate: startDate,
       endDate: endDate,
-      days: days,
+      levels: [CampaignLevel(levelNumber: 1)],
     );
     saveDraft();
     notifyListeners();
@@ -123,80 +130,76 @@ class CampaignProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Update campaign dates (rebuilds day slots).
+  /// Update campaign dates (levels are NOT rebuilt — they're independent of dates).
   void updateDates(DateTime startDate, DateTime endDate) {
     if (_activeCampaign == null) return;
-    final dayCount = endDate.difference(startDate).inDays + 1;
-    final existingDays = _activeCampaign!.days;
-
-    final newDays = List.generate(dayCount, (i) {
-      if (i < existingDays.length) {
-        return existingDays[i].copyWith(dayNumber: i + 1);
-      }
-      return DayPlan(dayNumber: i + 1);
-    });
-
     _activeCampaign = _activeCampaign!.copyWith(
       startDate: startDate,
       endDate: endDate,
-      days: newDays,
     );
     saveDraft();
     notifyListeners();
   }
 
-  /// Add a destination to a specific day.
-  void addDestination(int dayIndex, QuestNode quest) {
-    if (_activeCampaign == null || dayIndex >= _activeCampaign!.days.length) return;
+  /// Add a new empty level to the campaign.
+  void addLevel() {
+    if (_activeCampaign == null) return;
+    final levels = _activeCampaign!.levels.map((l) => l.copyWith()).toList();
+    final nextNumber = levels.isEmpty ? 1 : levels.last.levelNumber + 1;
+    levels.add(CampaignLevel(levelNumber: nextNumber));
+    _activeCampaign = _activeCampaign!.copyWith(levels: levels);
+    saveDraft();
+    notifyListeners();
+  }
+
+  /// Add a destination to a specific level.
+  void addDestination(int levelIndex, QuestNode quest) {
+    if (_activeCampaign == null || levelIndex >= _activeCampaign!.levels.length) return;
 
     // Calculate global order index
     int globalOrder = 0;
-    for (int i = 0; i < dayIndex; i++) {
-      globalOrder += _activeCampaign!.days[i].destinations.length;
+    for (int i = 0; i < levelIndex; i++) {
+      globalOrder += _activeCampaign!.levels[i].destinations.length;
     }
-    globalOrder += _activeCampaign!.days[dayIndex].destinations.length;
-
-    // Calculate activation date from campaign start + dayIndex
-    final activationDate = _activeCampaign!.startDate.add(Duration(days: dayIndex));
+    globalOrder += _activeCampaign!.levels[levelIndex].destinations.length;
 
     final taggedQuest = quest.copyWith(
       isMainQuest: true,
       orderIndex: globalOrder,
-      activationDate: activationDate,
     );
 
-    final days = _activeCampaign!.days.map((d) => d.copyWith()).toList();
-    days[dayIndex].destinations.add(taggedQuest);
-    _activeCampaign = _activeCampaign!.copyWith(days: days);
+    final levels = _activeCampaign!.levels.map((l) => l.copyWith()).toList();
+    levels[levelIndex].destinations.add(taggedQuest);
+    _activeCampaign = _activeCampaign!.copyWith(levels: levels);
     _recalculateOrderIndices();
     saveDraft();
     notifyListeners();
   }
 
-  /// Remove a destination from a specific day.
-  void removeDestination(int dayIndex, int questIndex) {
+  /// Remove a destination from a specific level.
+  void removeDestination(int levelIndex, int questIndex) {
     if (_activeCampaign == null) return;
-    final days = _activeCampaign!.days.map((d) => d.copyWith()).toList();
-    if (dayIndex < days.length && questIndex < days[dayIndex].destinations.length) {
-      days[dayIndex].destinations.removeAt(questIndex);
-      _activeCampaign = _activeCampaign!.copyWith(days: days);
+    final levels = _activeCampaign!.levels.map((l) => l.copyWith()).toList();
+    if (levelIndex < levels.length && questIndex < levels[levelIndex].destinations.length) {
+      levels[levelIndex].destinations.removeAt(questIndex);
+      _activeCampaign = _activeCampaign!.copyWith(levels: levels);
       _recalculateOrderIndices();
       saveDraft();
       notifyListeners();
     }
   }
 
-  /// Reorder a destination within a day.
-  void reorderDestination(int dayIndex, int oldIdx, int newIdx) {
+  /// Reorder a destination within a level.
+  void reorderDestination(int levelIndex, int oldIdx, int newIdx) {
     if (_activeCampaign == null) return;
-    final days = _activeCampaign!.days.map((d) => d.copyWith()).toList();
-    if (dayIndex < days.length) {
-      final dests = days[dayIndex].destinations;
+    final levels = _activeCampaign!.levels.map((l) => l.copyWith()).toList();
+    if (levelIndex < levels.length) {
+      final dests = levels[levelIndex].destinations;
       if (oldIdx < dests.length) {
         final item = dests.removeAt(oldIdx);
         if (newIdx > oldIdx) newIdx--;
         dests.insert(newIdx.clamp(0, dests.length), item);
-        _activeCampaign = _activeCampaign!.copyWith(days: days);
+        _activeCampaign = _activeCampaign!.copyWith(levels: levels);
         _recalculateOrderIndices();
         saveDraft();
         notifyListeners();
@@ -204,14 +207,27 @@ class CampaignProvider extends ChangeNotifier {
     }
   }
 
-  /// Recalculate sequential orderIndex across all days.
+  /// Mark a quest as completed within a level.
+  void completeQuest(int levelIndex, int questIndex) {
+    if (_activeCampaign == null) return;
+    final levels = _activeCampaign!.levels.map((l) => l.copyWith()).toList();
+    if (levelIndex < levels.length && questIndex < levels[levelIndex].destinations.length) {
+      levels[levelIndex].destinations[questIndex] =
+          levels[levelIndex].destinations[questIndex].copyWith(isCompleted: true);
+      _activeCampaign = _activeCampaign!.copyWith(levels: levels);
+      saveDraft();
+      notifyListeners();
+    }
+  }
+
+  /// Recalculate sequential orderIndex across all levels.
   void _recalculateOrderIndices() {
     if (_activeCampaign == null) return;
     int idx = 0;
-    final days = _activeCampaign!.days;
-    for (int d = 0; d < days.length; d++) {
-      for (int q = 0; q < days[d].destinations.length; q++) {
-        days[d].destinations[q] = days[d].destinations[q].copyWith(orderIndex: idx);
+    final levels = _activeCampaign!.levels;
+    for (int l = 0; l < levels.length; l++) {
+      for (int q = 0; q < levels[l].destinations.length; q++) {
+        levels[l].destinations[q] = levels[l].destinations[q].copyWith(orderIndex: idx);
         idx++;
       }
     }
@@ -219,10 +235,10 @@ class CampaignProvider extends ChangeNotifier {
 
   // ─── AI Co-Pilot (Mock) ───
 
-  /// Mock AI: generates 3 themed destinations for a day after 3s delay.
+  /// Mock AI: generates 3 themed destinations for a level after 3s delay.
   /// [targetArea] is the name of the area the user wants to explore.
-  /// [lat]/[lng] is the starting point (from previous day's last stop or user GPS).
-  Future<void> generateDayPlan(String classType, int dayIndex, double lat, double lng, {String targetArea = ''}) async {
+  /// [lat]/[lng] is the starting point (from previous level's last stop or user GPS).
+  Future<void> generateLevelPlan(String classType, int levelIndex, double lat, double lng, {String targetArea = ''}) async {
     _isLoading = true;
     notifyListeners();
 
@@ -258,7 +274,7 @@ class CampaignProvider extends ChangeNotifier {
     }
 
     for (final quest in generatedQuests) {
-      addDestination(dayIndex, quest);
+      addDestination(levelIndex, quest);
     }
 
     _isLoading = false;

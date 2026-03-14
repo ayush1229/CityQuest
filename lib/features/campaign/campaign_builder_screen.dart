@@ -36,13 +36,15 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
       cp.loadDraft().then((draft) {
         if (draft != null && mounted) {
           cp.createCampaign(draft.title, draft.startDate, draft.endDate);
-          // Restore day destinations from draft
-          for (int d = 0; d < draft.days.length; d++) {
-            final dayDests = draft.days[d].destinations;
-            for (final dest in dayDests) {
-              if (d < cp.activeCampaign!.days.length) {
-                cp.addDestination(d, dest);
-              }
+          // Restore level destinations from draft
+          for (int l = 0; l < draft.levels.length; l++) {
+            // Add extra levels if needed
+            while (cp.activeCampaign!.levels.length <= l) {
+              cp.addLevel();
+            }
+            final levelDests = draft.levels[l].destinations;
+            for (final dest in levelDests) {
+              cp.addDestination(l, dest);
             }
           }
           setState(() {
@@ -113,13 +115,13 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
     setState(() => _isCreated = true);
   }
 
-  Future<void> _addDestination(int dayIndex) async {
+  Future<void> _addDestination(int levelIndex) async {
     final cp = context.read<CampaignProvider>();
-    // Get context from previous day's last stop
-    final previousStop = cp.getPreviousDayLastStop(dayIndex);
-    // Also check current day's last stop as fallback
-    final currentDayLast = cp.getLastDestinationOfDay(dayIndex);
-    final contextStop = currentDayLast ?? previousStop;
+    // Get context from previous level's last stop
+    final previousStop = cp.getPreviousLevelLastStop(levelIndex);
+    // Also check current level's last stop as fallback
+    final currentLevelLast = cp.getLastDestinationOfLevel(levelIndex);
+    final contextStop = currentLevelLast ?? previousStop;
 
     final result = await showModalBottomSheet<QuestNode>(
       context: context,
@@ -132,28 +134,28 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
       ),
     );
     if (result != null && mounted) {
-      cp.addDestination(dayIndex, result);
+      cp.addDestination(levelIndex, result);
     }
   }
 
-  void _showClassSelection(int dayIndex) {
+  void _showClassSelection(int levelIndex) {
     final cp = context.read<CampaignProvider>();
-    final previousStop = cp.getPreviousDayLastStop(dayIndex);
+    final previousStop = cp.getPreviousLevelLastStop(levelIndex);
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _ClassSelectionSheet(
-        dayIndex: dayIndex,
+        levelIndex: levelIndex,
         previousStopName: previousStop?.title,
         previousStopLat: previousStop?.latitude,
         previousStopLng: previousStop?.longitude,
         onClassSelected: (classType, targetArea, lat, lng) async {
           Navigator.pop(context);
-          await context.read<CampaignProvider>().generateDayPlan(
+          await context.read<CampaignProvider>().generateLevelPlan(
             classType,
-            dayIndex,
+            levelIndex,
             lat,
             lng,
             targetArea: targetArea,
@@ -220,15 +222,41 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                   if (!_isCreated)
                     _buildCreateButton()
                   else ...[
-                    // Day Timeline
+                    // Level Timeline
                     ...List.generate(
-                      campaignProvider.activeCampaign?.days.length ?? 0,
-                      (i) => _buildDayCard(
-                        campaignProvider.activeCampaign!.days[i],
+                      campaignProvider.activeCampaign?.levels.length ?? 0,
+                      (i) => _buildLevelCard(
+                        campaignProvider.activeCampaign!.levels[i],
                         i,
                         campaignProvider,
                       ),
                     ),
+                    // Add Next Level button
+                    const SizedBox(height: 8),
+                    GestureDetector(
+                      onTap: () => campaignProvider.addLevel(),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: AppTheme.accentGold.withValues(alpha: 0.3)),
+                          borderRadius: BorderRadius.circular(14),
+                          color: AppTheme.accentGold.withValues(alpha: 0.05),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.add_circle_outline, size: 18, color: AppTheme.accentGold.withValues(alpha: 0.7)),
+                            const SizedBox(width: 8),
+                            Text('ADD NEXT LEVEL',
+                              style: GoogleFonts.montserrat(
+                                fontSize: 13, fontWeight: FontWeight.w700,
+                                letterSpacing: 1.5, color: AppTheme.accentGold.withValues(alpha: 0.7),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ).animate().fadeIn(duration: 300.ms),
                   ],
                 ],
               ),
@@ -390,9 +418,8 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
     ).animate().fadeIn(duration: 500.ms, delay: 300.ms).scale(begin: const Offset(0.95, 0.95));
   }
 
-  Widget _buildDayCard(DayPlan day, int dayIndex, CampaignProvider provider) {
+  Widget _buildLevelCard(CampaignLevel level, int levelIndex, CampaignProvider provider) {
     final campaign = provider.activeCampaign!;
-    final date = campaign.startDate.add(Duration(days: dayIndex));
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
@@ -419,17 +446,17 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                   ),
                   child: Center(
                     child: Text(
-                      '${day.dayNumber}',
+                      '${level.levelNumber}',
                       style: GoogleFonts.montserrat(
                         fontSize: 14, fontWeight: FontWeight.w800, color: Colors.black,
                       ),
                     ),
                   ),
                 ),
-                if (dayIndex < campaign.days.length - 1)
+                if (levelIndex < campaign.levels.length - 1)
                   Container(
                     width: 2,
-                    height: day.destinations.isEmpty ? 100 : (day.destinations.length * 70 + 120).toDouble(),
+                    height: level.destinations.isEmpty ? 100 : (level.destinations.length * 70 + 120).toDouble(),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         colors: [AppTheme.accentGold, AppTheme.accentGold.withValues(alpha: 0.2)],
@@ -443,7 +470,7 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
           ),
           const SizedBox(width: 12),
 
-          // Day Content
+          // Level Content
           Expanded(
             child: Container(
               margin: const EdgeInsets.only(bottom: 16),
@@ -458,25 +485,21 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                 children: [
                   Row(
                     children: [
-                      Text('DAY ${day.dayNumber}',
+                      Text('LEVEL ${level.levelNumber}',
                         style: GoogleFonts.montserrat(
                           fontSize: 14, fontWeight: FontWeight.w800,
                           letterSpacing: 1.5, color: AppTheme.accentGold,
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Text(_formatDate(date),
-                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                      ),
                       const Spacer(),
-                      Text('${day.destinations.length} stops',
+                      Text('${level.destinations.length} stops',
                         style: const TextStyle(color: Colors.white38, fontSize: 11),
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
 
-                  if (day.destinations.isEmpty)
+                  if (level.destinations.isEmpty)
                     Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
@@ -493,7 +516,7 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                       ),
                     )
                   else
-                    ...day.destinations.asMap().entries.map((entry) {
+                    ...level.destinations.asMap().entries.map((entry) {
                       final quest = entry.value;
                       final qIndex = entry.key;
                       return GestureDetector(
@@ -554,7 +577,7 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                               ),
                               const SizedBox(width: 8),
                               GestureDetector(
-                                onTap: () => provider.removeDestination(dayIndex, qIndex),
+                                onTap: () => provider.removeDestination(levelIndex, qIndex),
                                 child: const Icon(Icons.close, size: 16, color: Colors.white30),
                               ),
                             ],
@@ -570,7 +593,7 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                     children: [
                       Expanded(
                         child: GestureDetector(
-                          onTap: () => _addDestination(dayIndex),
+                          onTap: () => _addDestination(levelIndex),
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 10),
                             decoration: BoxDecoration(
@@ -592,7 +615,7 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
                       ),
                       const SizedBox(width: 10),
                       GestureDetector(
-                        onTap: () => _showClassSelection(dayIndex),
+                        onTap: () => _showClassSelection(levelIndex),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                           decoration: BoxDecoration(
@@ -624,7 +647,7 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
           ),
         ],
       ),
-    ).animate().fadeIn(duration: 400.ms, delay: (dayIndex * 150).ms).slideX(begin: 0.05, end: 0);
+    ).animate().fadeIn(duration: 400.ms, delay: (levelIndex * 150).ms).slideX(begin: 0.05, end: 0);
   }
 
   Widget _buildForgeButton(CampaignProvider provider) {
@@ -698,14 +721,14 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
 // ═══════════════════════════════════════════
 
 class _ClassSelectionSheet extends StatefulWidget {
-  final int dayIndex;
+  final int levelIndex;
   final String? previousStopName;
   final double? previousStopLat;
   final double? previousStopLng;
   final Function(String classType, String targetArea, double lat, double lng) onClassSelected;
 
   const _ClassSelectionSheet({
-    required this.dayIndex,
+    required this.levelIndex,
     required this.onClassSelected,
     this.previousStopName,
     this.previousStopLat,
@@ -722,7 +745,7 @@ class _ClassSelectionSheetState extends State<_ClassSelectionSheet> {
   @override
   void initState() {
     super.initState();
-    // Auto-fill with previous day's last stop name
+    // Auto-fill with previous level's last stop name
     _areaController = TextEditingController(
       text: widget.previousStopName ?? '',
     );
@@ -765,7 +788,7 @@ class _ClassSelectionSheetState extends State<_ClassSelectionSheet> {
               ),
             ),
             const SizedBox(height: 6),
-            Text('AI will generate stops for Day ${widget.dayIndex + 1}',
+            Text('AI will generate stops for Level ${widget.levelIndex + 1}',
               style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
             const SizedBox(height: 20),
@@ -803,7 +826,7 @@ class _ClassSelectionSheetState extends State<_ClassSelectionSheet> {
                     Icon(Icons.info_outline, size: 12, color: Colors.white24),
                     const SizedBox(width: 6),
                     Text(
-                      'Auto-filled from Day ${widget.dayIndex}\'s last stop',
+                      'Auto-filled from Level ${widget.levelIndex}\'s last stop',
                       style: const TextStyle(color: Colors.white24, fontSize: 11),
                     ),
                   ],

@@ -148,24 +148,17 @@ class _QuestsListScreenState extends State<QuestsListScreen>
   }
 
   Widget _buildCampaignCard(Campaign campaign, CampaignProvider cp) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final start =
-        DateTime(campaign.startDate.year, campaign.startDate.month, campaign.startDate.day);
-    final end = DateTime(campaign.endDate.year, campaign.endDate.month, campaign.endDate.day);
-
     String status;
     Color statusColor;
-    if (today.isBefore(start)) {
-      final daysLeft = start.difference(today).inDays;
-      status = 'Starts in $daysLeft day${daysLeft == 1 ? '' : 's'}';
-      statusColor = Colors.orange;
-    } else if (today.isAfter(end)) {
-      status = 'Completed';
+    final activeLevel = cp.getActiveLevel();
+    final totalLevels = campaign.levels.length;
+    final allComplete = campaign.levels.isNotEmpty && campaign.levels.every((l) => l.isCompleted);
+
+    if (allComplete) {
+      status = 'All Levels Complete!';
       statusColor = AppTheme.successGreen;
     } else {
-      final currentDay = today.difference(start).inDays + 1;
-      status = 'Day $currentDay of ${campaign.days.length}';
+      status = 'Level $activeLevel of $totalLevels';
       statusColor = AppTheme.accentGold;
     }
 
@@ -250,7 +243,7 @@ class _QuestsListScreenState extends State<QuestsListScreen>
                 _statChip(Icons.flag_rounded, '${campaign.totalDestinations} stops',
                     Colors.white54),
                 const SizedBox(width: 12),
-                _statChip(Icons.calendar_today, '${campaign.days.length} days',
+                _statChip(Icons.layers, '${campaign.levels.length} levels',
                     Colors.white54),
                 const Spacer(),
                 Container(
@@ -291,30 +284,28 @@ class _QuestsListScreenState extends State<QuestsListScreen>
   // ── TIMELINE ──
 
   Widget _buildTimeline(Campaign campaign, CampaignProvider cp) {
+    final activeLevel = cp.getActiveLevel();
+
     return Column(
-      children: List.generate(campaign.days.length, (dayIdx) {
-        final day = campaign.days[dayIdx];
-        final dayDate = campaign.startDate.add(Duration(days: dayIdx));
-        final now = DateTime.now();
-        final todayDate = DateTime(now.year, now.month, now.day);
-        final thisDayDate = DateTime(dayDate.year, dayDate.month, dayDate.day);
-        final isDayActive = !todayDate.isBefore(thisDayDate);
-        final isToday = todayDate == thisDayDate;
+      children: List.generate(campaign.levels.length, (levelIdx) {
+        final level = campaign.levels[levelIdx];
+        final isLevelUnlocked = level.levelNumber <= activeLevel;
+        final isActiveLevel = level.levelNumber == activeLevel;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Day Header ──
+            // ── Level Header ──
             Container(
               margin: const EdgeInsets.only(bottom: 12, top: 8),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: isToday
+                color: isActiveLevel
                     ? AppTheme.accentGold.withOpacity(0.12)
                     : Colors.white.withOpacity(0.04),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                  color: isToday
+                  color: isActiveLevel
                       ? AppTheme.accentGold.withOpacity(0.3)
                       : Colors.white10,
                 ),
@@ -322,39 +313,36 @@ class _QuestsListScreenState extends State<QuestsListScreen>
               child: Row(
                 children: [
                   Icon(
-                    isToday ? Icons.wb_sunny_rounded : Icons.calendar_today,
+                    isLevelUnlocked ? Icons.shield : Icons.lock,
                     size: 16,
-                    color: isToday ? AppTheme.accentGold : Colors.white38,
+                    color: isActiveLevel ? AppTheme.accentGold : (isLevelUnlocked ? AppTheme.successGreen : Colors.white38),
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    'DAY ${dayIdx + 1}',
+                    'LEVEL ${level.levelNumber}',
                     style: GoogleFonts.montserrat(
                       fontSize: 13,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 1.5,
-                      color: isDayActive ? AppTheme.accentGold : Colors.white30,
+                      color: isLevelUnlocked ? AppTheme.accentGold : Colors.white30,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    DateFormat('dd MMM, EEE').format(dayDate),
-                    style: TextStyle(
-                      color: isDayActive ? Colors.white54 : Colors.white24,
-                      fontSize: 12,
-                    ),
-                  ),
-                  if (isToday) ...[
+                  if (level.isCompleted) ...[
+                    const SizedBox(width: 8),
+                    const Icon(Icons.check_circle, size: 14, color: AppTheme.successGreen),
+                    const SizedBox(width: 4),
+                    const Text('Complete', style: TextStyle(color: AppTheme.successGreen, fontSize: 11, fontWeight: FontWeight.w600)),
+                  ],
+                  if (isActiveLevel && !level.isCompleted) ...[
                     const Spacer(),
                     Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: AppTheme.accentGold,
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        'TODAY',
+                        'ACTIVE',
                         style: GoogleFonts.montserrat(
                           fontSize: 9,
                           fontWeight: FontWeight.w800,
@@ -363,16 +351,19 @@ class _QuestsListScreenState extends State<QuestsListScreen>
                       ),
                     ),
                   ],
-                  if (!isDayActive) ...[
+                  if (!isLevelUnlocked) ...[
                     const Spacer(),
-                    const Icon(Icons.lock, size: 14, color: Colors.white24),
+                    Text(
+                      'Complete Level ${level.levelNumber - 1} to unlock',
+                      style: const TextStyle(color: Colors.white24, fontSize: 10),
+                    ),
                   ],
                 ],
               ),
-            ).animate().fadeIn(duration: 300.ms, delay: (dayIdx * 100).ms),
+            ).animate().fadeIn(duration: 300.ms, delay: (levelIdx * 100).ms),
 
-            // ── Quest Nodes for this day ──
-            if (day.destinations.isEmpty)
+            // ── Quest Nodes for this level ──
+            if (level.destinations.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(left: 24, bottom: 16),
                 child: Text(
@@ -385,22 +376,22 @@ class _QuestsListScreenState extends State<QuestsListScreen>
                 ),
               )
             else
-              ...day.destinations.asMap().entries.map((entry) {
+              ...level.destinations.asMap().entries.map((entry) {
                 final questIdx = entry.key;
                 final quest = entry.value;
-                final isLocked = quest.isLocked;
-                final isLast = questIdx == day.destinations.length - 1;
+                final isQuestLocked = !isLevelUnlocked;
+                final isLast = questIdx == level.destinations.length - 1;
 
                 return _buildTimelineNode(
                   quest: quest,
-                  isLocked: isLocked,
+                  isLocked: isQuestLocked,
                   isLast: isLast,
-                  dayIdx: dayIdx,
+                  levelIdx: levelIdx,
                   questIdx: questIdx,
                   cp: cp,
                 ).animate().fadeIn(
                       duration: 300.ms,
-                      delay: (dayIdx * 100 + questIdx * 80).ms,
+                      delay: (levelIdx * 100 + questIdx * 80).ms,
                     );
               }),
           ],
@@ -413,7 +404,7 @@ class _QuestsListScreenState extends State<QuestsListScreen>
     required QuestNode quest,
     required bool isLocked,
     required bool isLast,
-    required int dayIdx,
+    required int levelIdx,
     required int questIdx,
     required CampaignProvider cp,
   }) {
@@ -500,15 +491,15 @@ class _QuestsListScreenState extends State<QuestsListScreen>
                             overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 4),
-                          if (isLocked && quest.activationDate != null)
+                          if (isLocked)
                             Row(
                               children: [
-                                const Icon(Icons.lock_clock,
+                                const Icon(Icons.lock,
                                     size: 13, color: Colors.white30),
                                 const SizedBox(width: 4),
-                                Text(
-                                  'Unlocks on ${DateFormat('dd MMM').format(quest.activationDate!)}',
-                                  style: const TextStyle(
+                                const Text(
+                                  'Level locked',
+                                  style: TextStyle(
                                     color: Colors.white30,
                                     fontSize: 11,
                                   ),

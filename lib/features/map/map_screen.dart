@@ -5,7 +5,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
-import 'package:maps_toolkit/maps_toolkit.dart' as mtk;
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -26,7 +25,6 @@ import 'package:cityquest/features/quest/quests_list_screen.dart';
 import 'package:cityquest/features/lore/lore_screen.dart';
 import 'package:cityquest/features/map/poi_detail_sheet.dart';
 import 'package:cityquest/features/campaign/campaign_builder_screen.dart';
-import 'package:cityquest/models/moving_vehicle.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -56,11 +54,6 @@ class _MapScreenState extends State<MapScreen> {
   int _sparklePhase = 0;
   Timer? _sparkleTimer;
   int _sparkleSpacing = 8;
-
-  // Traffic simulation
-  List<MovingVehicle> _activeVehicles = [];
-  Timer? _vehicleTimer;
-  List<List<LatLng>> _ambientGridPaths = [];
 
   // Dual-line routing: magical pointer = straight line, street route = Directions API
   List<LatLng> _magicalPointerPoints = [];
@@ -94,7 +87,7 @@ class _MapScreenState extends State<MapScreen> {
     _sparkleTimer = Timer.periodic(const Duration(milliseconds: 800), (_) {
       if (!mounted) return;
       // Only rebuild if there's an active route with sparkles
-      if (_emergencyRoutePoints.isNotEmpty && _sparkleIcon != null) {
+      if (_magicalPointerPoints.length >= 2 && _sparkleIcon != null) {
         setState(() {
           _sparklePhase = (_sparklePhase + 1) % _sparkleSpacing;
         });
@@ -252,7 +245,6 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void dispose() {
     _sparkleTimer?.cancel();
-    _vehicleTimer?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
@@ -775,56 +767,68 @@ class _MapScreenState extends State<MapScreen> {
           );
         }
 
-        // Campaign main quest markers — time-gated
+        // Campaign main quest markers — level-gated with ghosting
         final campaignProvider = context.watch<CampaignProvider>();
-        final mainQuests = campaignProvider.mainQuests;
-        for (final mq in mainQuests) {
-          final isLocked = mq.isLocked;
-          markers.add(
-            Marker(
-              markerId: MarkerId('campaign_${mq.id}'),
-              position: LatLng(mq.latitude, mq.longitude),
-              icon: BitmapDescriptor.defaultMarkerWithHue(
-                isLocked ? BitmapDescriptor.hueRose : BitmapDescriptor.hueYellow,
-              ),
-              alpha: isLocked ? 0.45 : 1.0,
-              zIndex: isLocked ? 15 : 20,
-              onTap: () {
-                if (isLocked) {
-                  final dateStr = mq.activationDate != null
-                      ? DateFormat('dd MMM').format(mq.activationDate!)
-                      : 'a future date';
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Row(
-                        children: [
-                          const Icon(Icons.lock, color: Colors.white, size: 18),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'This area is locked. Return on $dateStr to continue your campaign.',
-                              style: const TextStyle(fontWeight: FontWeight.w500),
+        final activeLevel = campaignProvider.getActiveLevel();
+        final campaignLevels = campaignProvider.activeCampaign?.levels ?? [];
+        for (final level in campaignLevels) {
+          final isFutureLevel = level.levelNumber > activeLevel;
+          for (final mq in level.destinations) {
+            markers.add(
+              Marker(
+                markerId: MarkerId('campaign_${mq.id}'),
+                position: LatLng(mq.latitude, mq.longitude),
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  isFutureLevel ? BitmapDescriptor.hueRose : BitmapDescriptor.hueYellow,
+                ),
+                alpha: isFutureLevel ? 0.4 : 1.0,
+                zIndex: isFutureLevel ? 15 : 20,
+                onTap: () {
+                  if (isFutureLevel) {
+                    // Locked intercept dialog
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        backgroundColor: AppTheme.surfaceDark,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        title: const Text('🔒 Level Locked',
+                          style: TextStyle(color: AppTheme.accentGold, fontWeight: FontWeight.w700),
+                        ),
+                        content: Text(
+                          'This quest belongs to Level ${level.levelNumber}. Complete your active level to unlock it!',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('Close', style: TextStyle(color: Colors.white54)),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              _showPoiDetails(mq.id, mq.title,
+                                  lat: mq.latitude, lng: mq.longitude);
+                            },
+                            child: const Text('View Place Info',
+                              style: TextStyle(color: AppTheme.accentGold, fontWeight: FontWeight.w600),
                             ),
                           ),
                         ],
                       ),
-                      backgroundColor: AppTheme.surfaceDark,
-                      behavior: SnackBarBehavior.floating,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      duration: const Duration(seconds: 3),
-                    ),
-                  );
-                } else {
-                  questProvider.setActiveQuest(mq);
-                  _showPlaceInfoCard(context, mq, locProvider, questProvider);
-                }
-              },
-            ),
-          );
+                    );
+                  } else {
+                    questProvider.setActiveQuest(mq);
+                    _showPlaceInfoCard(context, mq, locProvider, questProvider);
+                  }
+                },
+              ),
+            );
+          }
         }
 
         // Campaign polyline (connect main quests in order)
         final Set<Polyline> polylines = {};
+        final mainQuests = campaignProvider.mainQuests;
         if (mainQuests.length >= 2) {
           polylines.add(
             Polyline(
@@ -845,8 +849,8 @@ class _MapScreenState extends State<MapScreen> {
             Polyline(
               polylineId: const PolylineId('quest_route'),
               points: questProvider.routePoints,
-              color: AppTheme.accentGold,
-              width: 5,
+              color: const Color(0xFF2196F3),
+              width: 6,
               startCap: Cap.roundCap,
               endCap: Cap.roundCap,
             ),
@@ -855,15 +859,6 @@ class _MapScreenState extends State<MapScreen> {
 
         final radiusOptions = [250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0];
         final radiusLabels = ['250m', '500m', '1km', '2km', '5km', '10km'];
-
-        // Vehicle markers (only if traffic enabled)
-        Set<Marker> vehicleMarkers = {};
-        if (settings.showTraffic && _activeVehicles.isNotEmpty) {
-          vehicleMarkers = _buildVehicleMarkers(
-            locProvider.latitude, locProvider.longitude,
-            questProvider.searchRadius,
-          );
-        }
 
         return Stack(
           children: [
@@ -883,8 +878,7 @@ class _MapScreenState extends State<MapScreen> {
                         return _poiCategories[pid] == _activePoiFilter;
                       }).toSet()),
                 ...markers,
-                ...vehicleMarkers,
-                ..._buildSparkleMarkers(_emergencyRoutePoints),
+                ..._buildSparkleMarkers(_magicalPointerPoints),
               },
               polylines: {...polylines, ..._emergencyRoute},
               mapToolbarEnabled: false,
@@ -1523,6 +1517,7 @@ class _MapScreenState extends State<MapScreen> {
     // Find nearest POI of this category
     double nearestDist = double.infinity;
     LatLng? nearestPos;
+    String? nearestPlaceId;
 
     for (final marker in _poiMarkers) {
       final pid = marker.markerId.value.replaceFirst('poi_', '');
@@ -1533,6 +1528,7 @@ class _MapScreenState extends State<MapScreen> {
       if (dist < nearestDist) {
         nearestDist = dist;
         nearestPos = marker.position;
+        nearestPlaceId = pid;
       }
     }
 
@@ -1581,8 +1577,8 @@ class _MapScreenState extends State<MapScreen> {
               Polyline(
                 polylineId: const PolylineId('street_route'),
                 points: streetPoints,
-                color: Colors.white,
-                width: 4,
+                color: const Color(0xFF2196F3),
+                width: 6,
                 startCap: Cap.roundCap,
                 endCap: Cap.roundCap,
                 zIndex: 3,
@@ -1601,9 +1597,6 @@ class _MapScreenState extends State<MapScreen> {
       _emergencyRoute = {...streetPolyline, ...pointerPolylines};
     });
 
-    // Start ambient traffic
-    _startTrafficSimulation();
-
     _mapController?.animateCamera(
       CameraUpdate.newCameraPosition(
         CameraPosition(
@@ -1613,6 +1606,20 @@ class _MapScreenState extends State<MapScreen> {
         ),
       ),
     );
+
+    // Open the nearest POI's info card after camera settles
+    if (nearestPlaceId != null) {
+      final displayName = category == 'hospital' ? 'Nearest Hospital'
+          : category == 'restaurant' ? 'Nearest Restaurant'
+          : category == 'petrol_pump' ? 'Nearest Petrol Pump'
+          : 'Nearest Place';
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted) {
+          _showPoiDetails(nearestPlaceId!, displayName,
+              lat: nearestPos!.latitude, lng: nearestPos.longitude);
+        }
+      });
+    }
   }
 
   /// Build static double-stacked "Magical Pointer" polylines (no animation).
@@ -1645,17 +1652,30 @@ class _MapScreenState extends State<MapScreen> {
     };
   }
 
-  /// Build sparkle markers distributed along the route.
-  /// The _sparklePhase shifts every 800ms creating a "marquee" flowing effect.
-  Set<Marker> _buildSparkleMarkers(List<LatLng> routePoints) {
-    if (routePoints.isEmpty || _sparkleIcon == null) return {};
-    final Set<Marker> sparkles = {};
+  /// Build sparkle markers along the straight magical pointer line.
+  /// Interpolates points along the line, then shifts with _sparklePhase for marquee.
+  Set<Marker> _buildSparkleMarkers(List<LatLng> linePoints) {
+    if (linePoints.length < 2 || _sparkleIcon == null) return {};
 
-    for (int i = _sparklePhase; i < routePoints.length; i += _sparkleSpacing) {
+    // Interpolate ~20 evenly spaced points along the straight line
+    const totalSteps = 20;
+    final start = linePoints.first;
+    final end = linePoints.last;
+    final List<LatLng> interpolated = [];
+    for (int s = 0; s <= totalSteps; s++) {
+      final t = s / totalSteps;
+      interpolated.add(LatLng(
+        start.latitude + (end.latitude - start.latitude) * t,
+        start.longitude + (end.longitude - start.longitude) * t,
+      ));
+    }
+
+    final Set<Marker> sparkles = {};
+    for (int i = _sparklePhase; i < interpolated.length; i += _sparkleSpacing) {
       sparkles.add(
         Marker(
           markerId: MarkerId('sparkle_$i'),
-          position: routePoints[i],
+          position: interpolated[i],
           icon: _sparkleIcon!,
           anchor: const Offset(0.5, 0.5),
           flat: true,
@@ -1701,8 +1721,8 @@ class _MapScreenState extends State<MapScreen> {
             final streetPolyline = Polyline(
               polylineId: const PolylineId('street_route'),
               points: routePoints,
-              color: Colors.white,
-              width: 4,
+              color: const Color(0xFF2196F3),
+              width: 6,
               startCap: Cap.roundCap,
               endCap: Cap.roundCap,
               zIndex: 3,
@@ -1715,7 +1735,6 @@ class _MapScreenState extends State<MapScreen> {
               _emergencyRoute = {streetPolyline, ...pointerPolylines};
             });
 
-            _startTrafficSimulation();
 
             _mapController?.animateCamera(
               CameraUpdate.newLatLngBounds(
@@ -1746,140 +1765,6 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // ═══════════════════════════════════════════════════
-  //  AMBIENT OFFLINE TRAFFIC (Density-Based)
-  // ═══════════════════════════════════════════════════
-
-  /// Generate 2-3 circular "ambient road" paths around user location.
-  /// These are background roads that vehicles drive on. Zero API calls.
-  List<List<LatLng>> _generateAmbientGrid(LatLng center, double rangeMeters) {
-    final List<List<LatLng>> paths = [];
-    // Create 2-3 rings at different radii
-    final radii = [rangeMeters * 0.3, rangeMeters * 0.6, rangeMeters * 0.9];
-    const pointsPerRing = 8; // octagonal path
-
-    for (final radius in radii) {
-      final List<LatLng> ring = [];
-      for (int i = 0; i < pointsPerRing; i++) {
-        final angle = (2 * pi * i) / pointsPerRing;
-        // Approximate lat/lng offset from meters
-        final dLat = (radius * cos(angle)) / 111320;
-        final dLng = (radius * sin(angle)) / (111320 * cos(center.latitude * pi / 180));
-        ring.add(LatLng(center.latitude + dLat, center.longitude + dLng));
-      }
-      // Close the loop
-      ring.add(ring.first);
-      paths.add(ring);
-    }
-    return paths;
-  }
-
-  void _startTrafficSimulation() {
-    _vehicleTimer?.cancel();
-    _activeVehicles.clear();
-
-    final settings = context.read<SettingsProvider>();
-    if (!settings.showTraffic) return;
-    if (_spriteDecks['vehicles']!.isEmpty) return;
-
-    final locProvider = context.read<LocationProvider>();
-    if (locProvider.latitude == 0.0) return;
-
-    final userPos = LatLng(locProvider.latitude, locProvider.longitude);
-    final questProvider = context.read<QuestProvider>();
-
-    // Generate ambient grid roads around user (NOT on quest/emergency routes)
-    _ambientGridPaths = _generateAmbientGrid(userPos, questProvider.searchRadius);
-    if (_ambientGridPaths.isEmpty) return;
-
-    // Density-based vehicle count
-    int vehicleCount;
-    switch (settings.trafficDensity) {
-      case 'low':
-        vehicleCount = 2;
-        break;
-      case 'high':
-        vehicleCount = min(8, _spriteDecks['vehicles']!.length);
-        break;
-      default: // medium
-        vehicleCount = min(4, _spriteDecks['vehicles']!.length);
-    }
-
-    final vehicleDeck = List<BitmapDescriptor>.from(_spriteDecks['vehicles']!);
-    vehicleDeck.shuffle();
-
-    for (int i = 0; i < vehicleCount; i++) {
-      // Assign each vehicle to a different grid path (round-robin)
-      final route = _ambientGridPaths[i % _ambientGridPaths.length];
-      // Stagger start positions evenly along the route
-      final startIdx = (i * (route.length ~/ max(1, vehicleCount ~/ _ambientGridPaths.length + 1))) % route.length;
-      _activeVehicles.add(MovingVehicle(
-        id: 'vehicle_$i',
-        icon: vehicleDeck[i % vehicleDeck.length],
-        localRoute: route,
-        currentRouteIndex: startIdx,
-        currentPosition: route[startIdx],
-        currentHeading: -35,
-      ));
-    }
-
-    // Animate at ~7 FPS (150ms) — smooth ambient, light on CPU
-    _vehicleTimer = Timer.periodic(const Duration(milliseconds: 150), (_) {
-      if (!mounted) return;
-      final settings = context.read<SettingsProvider>();
-      if (!settings.showTraffic) {
-        _stopTrafficSimulation();
-        return;
-      }
-
-      setState(() {
-        for (final v in _activeVehicles) {
-          final nextIdx = (v.currentRouteIndex + 1) % v.localRoute.length;
-          final from = mtk.LatLng(
-            v.currentPosition.latitude, v.currentPosition.longitude,
-          );
-          final to = mtk.LatLng(
-            v.localRoute[nextIdx].latitude, v.localRoute[nextIdx].longitude,
-          );
-
-          // Interpolate 25% per tick for smooth gliding
-          final interpolated = mtk.SphericalUtil.interpolate(from, to, 0.25);
-          final heading = mtk.SphericalUtil.computeHeading(from, to).toDouble();
-
-          v.currentPosition = LatLng(interpolated.latitude, interpolated.longitude);
-          v.currentHeading = heading - 35; // 35° left offset
-
-          // Advance to next waypoint when close
-          final distToTarget = _haversineDistance(
-            v.currentPosition.latitude, v.currentPosition.longitude,
-            v.localRoute[nextIdx].latitude, v.localRoute[nextIdx].longitude,
-          );
-          if (distToTarget < 15) {
-            v.currentRouteIndex = nextIdx;
-          }
-        }
-      });
-    });
-  }
-
-  void _stopTrafficSimulation() {
-    _vehicleTimer?.cancel();
-    _vehicleTimer = null;
-    if (mounted) {
-      setState(() => _activeVehicles.clear());
-    }
-  }
-
-  double _haversineDistance(double lat1, double lon1, double lat2, double lon2) {
-    const R = 6371e3;
-    final dLat = (lat2 - lat1) * pi / 180;
-    final dLon = (lon2 - lon1) * pi / 180;
-    final a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) *
-        sin(dLon / 2) * sin(dLon / 2);
-    return R * 2 * atan2(sqrt(a), sqrt(1 - a));
-  }
-
   void _clearFilter() {
     setState(() {
       _activePoiFilter = null;
@@ -1890,28 +1775,13 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  /// Build vehicle markers for GoogleMap (only within radius, only if traffic on).
-  Set<Marker> _buildVehicleMarkers(double userLat, double userLng, double radius) {
-    final Set<Marker> vehicleMarkers = {};
-    for (final v in _activeVehicles) {
-      final dist = _haversineDistance(
-        userLat, userLng,
-        v.currentPosition.latitude, v.currentPosition.longitude,
-      );
-      if (dist > radius) continue;
-
-      vehicleMarkers.add(
-        Marker(
-          markerId: MarkerId(v.id),
-          position: v.currentPosition,
-          icon: v.icon,
-          rotation: v.currentHeading,
-          anchor: const Offset(0.5, 0.5),
-          flat: true,
-          zIndex: 5,
-        ),
-      );
-    }
-    return vehicleMarkers;
+  double _haversineDistance(double lat1, double lon1, double lat2, double lon2) {
+    const R = 6371e3;
+    final dLat = (lat2 - lat1) * pi / 180;
+    final dLon = (lon2 - lon1) * pi / 180;
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) *
+        sin(dLon / 2) * sin(dLon / 2);
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a));
   }
 }
