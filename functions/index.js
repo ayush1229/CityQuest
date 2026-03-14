@@ -8,6 +8,69 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 initializeApp();
 const db = getFirestore();
 
+// ═══════════════════════════════════════════
+//  3-TIER AI FALLBACK: Gemini → OpenRouter → Hardcoded
+// ═══════════════════════════════════════════
+
+/**
+ * Attempt to generate AI text with a 3-tier waterfall.
+ * 1. Google Gemini (primary)
+ * 2. OpenRouter /free (secondary)
+ * 3. Returns null (caller handles hardcoded fallback)
+ */
+async function generateWithAI(prompt, geminiApiKey) {
+    // ── Tier 1: Gemini ──
+    try {
+        const genAI = new GoogleGenerativeAI(geminiApiKey);
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
+        const result = await model.generateContent(prompt);
+        let text = result.response.text();
+        if (text.startsWith("```json")) text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+        console.log("[AI] ✅ Gemini responded.");
+        return text;
+    } catch (geminiErr) {
+        console.error(`[AI] ⚠️ Gemini failed: ${geminiErr.message}`);
+    }
+
+    // ── Tier 2: OpenRouter ──
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+    if (openRouterKey) {
+        try {
+            const systemPrompt = `You are a game server API. You must respond ONLY with valid JSON. Do not include markdown formatting like \`\`\`json. Do not include any conversational text. Respond with nothing except the raw JSON object.`;
+            const orResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${openRouterKey}`,
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://cityquest.app",
+                    "X-Title": "CityQuest"
+                },
+                body: JSON.stringify({
+                    models: ["openrouter/free"],
+                    messages: [
+                        { role: "system", content: systemPrompt },
+                        { role: "user", content: prompt }
+                    ]
+                })
+            });
+            const orData = await orResponse.json();
+            if (orData.error) throw new Error(orData.error.message);
+            let text = orData.choices[0].message.content;
+            text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+            console.log(`[AI] ✅ OpenRouter responded (model: ${orData.model}).`);
+            return text;
+        } catch (orErr) {
+            console.error(`[AI] ⚠️ OpenRouter failed: ${orErr.message}`);
+        }
+    } else {
+        console.warn("[AI] ⚠️ OPENROUTER_API_KEY not set, skipping OpenRouter.");
+    }
+
+    // ── Tier 3: null = caller uses hardcoded fallback ──
+    console.warn("[AI] 🔴 All AI tiers failed. Using hardcoded fallback.");
+    return null;
+}
+
 // Helper for fallback question
 const getFallbackQuest = () => {
     return {
@@ -172,8 +235,6 @@ exports.generateQuest = onCall({ timeoutSeconds: 120 }, async (request) => {
                 const newPlaces = places.filter(p => !existingIds.has(p.id));
                 console.log(`[generateQuest] After dedup: ${newPlaces.length} new places to process`);
 
-                const genAI = new GoogleGenerativeAI(geminiApiKey);
-                const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
 
                 // Enforce quest type ratio: ~3 trivia : 3 discovery : 5 exploration (out of every 11)
                 const typePattern = ["exploration", "trivia", "exploration", "discovery", "exploration", "trivia", "discovery", "exploration", "trivia", "discovery", "exploration"];
@@ -194,15 +255,18 @@ exports.generateQuest = onCall({ timeoutSeconds: 120 }, async (request) => {
                     }
                     
                     let qData;
-                    try {
-                        const result = await model.generateContent(prompt);
-                        let responseText = result.response.text();
-                        if (responseText.startsWith("\`\`\`json")) responseText = responseText.replace(/\`\`\`json/g, "").replace(/\`\`\`/g, "").trim();
-                        qData = JSON.parse(responseText);
-                        // Enforce the assigned type in case Gemini overrides it
-                        qData.quest_type = assignedType;
-                    } catch (e) {
-                        console.error(`[generateQuest] Gemini error for ${locData.name}: ${e.message}`);
+                    const aiText = await generateWithAI(prompt, geminiApiKey);
+                    if (aiText) {
+                        try {
+                            qData = JSON.parse(aiText);
+                            qData.quest_type = assignedType;
+                        } catch (parseErr) {
+                            console.error(`[generateQuest] JSON parse error for ${locData.name}: ${parseErr.message}`);
+                            qData = null;
+                        }
+                    }
+                    // Hardcoded fallback (Tier 3)
+                    if (!qData) {
                         qData = { quest_type: assignedType, title: `Explore ${locData.name}`, xp_reward: 75 };
                         if (assignedType === "trivia") {
                             qData.question = `What makes ${locData.name} an interesting place?`;
@@ -488,5 +552,172 @@ exports.claimLoginBonus = onCall(async (request) => {
     } catch (error) {
         console.error("claimLoginBonus error:", error);
         throw new HttpsError("internal", "Failed to claim login bonus.");
+    }
+});
+
+/**
+ * generateCampaignQuests (HTTPS Callable)
+ * Used by the Oracle in Campaign Builder.
+ * Searches real places via Google Places API, then uses AI to generate quest descriptions.
+ * Returns real googlePlaceId + coordinates for each quest.
+ */
+exports.generateCampaignQuests = onCall({ timeoutSeconds: 120 }, async (request) => {
+    if (!request.auth) {
+        throw new HttpsError("unauthenticated", "User must be logged in.");
+    }
+
+    const { classType, latitude, longitude, targetArea } = request.data || {};
+    if (!classType || !latitude || !longitude) {
+        throw new HttpsError("invalid-argument", "classType, latitude, and longitude are required.");
+    }
+
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const placesApiKey = process.env.PLACES_API_KEY;
+    const area = targetArea || 'the area';
+
+    // Theme-specific place types for Google Places API
+    let placeTypes;
+    let themeDesc;
+    switch (classType) {
+        case 'adventurer':
+            placeTypes = ["park", "campground", "national_park", "hiking_area", "tourist_attraction"];
+            themeDesc = 'outdoor adventure';
+            break;
+        case 'scholar':
+            placeTypes = ["museum", "library", "university", "church", "hindu_temple", "historical_landmark", "cultural_landmark"];
+            themeDesc = 'historical and cultural discovery';
+            break;
+        case 'tavern_hunter':
+            placeTypes = ["restaurant", "cafe", "bakery", "bar", "meal_takeaway", "food_court"];
+            themeDesc = 'food and drinks';
+            break;
+        default:
+            placeTypes = ["tourist_attraction", "park", "museum", "point_of_interest"];
+            themeDesc = 'general exploration';
+    }
+
+    try {
+        // ── Step 1: Find real places via Google Places Nearby Search ──
+        let places = [];
+        if (placesApiKey) {
+            try {
+                const placesUrl = 'https://places.googleapis.com/v1/places:searchNearby';
+                const placesPayload = {
+                    includedTypes: placeTypes,
+                    maxResultCount: 5,
+                    locationRestriction: {
+                        circle: {
+                            center: { latitude, longitude },
+                            radius: 5000.0 // 5km radius
+                        }
+                    }
+                };
+
+                const placesResponse = await axios.post(placesUrl, placesPayload, {
+                    headers: {
+                        "X-Goog-Api-Key": placesApiKey,
+                        "X-Goog-FieldMask": "places.id,places.displayName,places.location,places.formattedAddress,places.primaryType",
+                        "Content-Type": "application/json"
+                    }
+                });
+                places = placesResponse.data.places || [];
+                console.log(`[generateCampaignQuests] Places API returned ${places.length} results.`);
+            } catch (placesErr) {
+                console.error(`[generateCampaignQuests] Places API error: ${placesErr.response?.data?.error?.message || placesErr.message}`);
+            }
+        }
+
+        // Take up to 3 places
+        const selectedPlaces = places.slice(0, 3);
+
+        if (selectedPlaces.length > 0) {
+            // ── Step 2: Use AI to generate quest text for each real place ──
+            const questTypePattern = ["exploration", "discovery", "trivia"];
+            const questPromises = selectedPlaces.map(async (place, idx) => {
+                const placeName = place.displayName?.text || "Unknown Location";
+                const placeAddr = place.formattedAddress || '';
+                const placeType = place.primaryType || 'point_of_interest';
+                const assignedQuestType = questTypePattern[idx % questTypePattern.length];
+
+                const prompt = `You are a gamified travel app quest generator.
+Generate a single ${assignedQuestType.toUpperCase()} quest for this real location:
+- Place: ${placeName}
+- Address: ${placeAddr}
+- Type: ${placeType}
+- Theme: ${themeDesc}
+
+Return ONLY a valid JSON object:
+{
+  "title": "A creative quest title",
+  "description": "An engaging ${assignedQuestType === 'exploration' ? 'cryptic clue to find this place' : assignedQuestType === 'discovery' ? 'fascinating fact about this place' : 'trivia question about this place'}",
+  "xpReward": 100
+}`;
+
+                const aiText = await generateWithAI(prompt, geminiApiKey);
+                let questData = null;
+                if (aiText) {
+                    try {
+                        questData = JSON.parse(aiText);
+                    } catch (e) {
+                        console.error(`[generateCampaignQuests] Parse error for ${placeName}: ${e.message}`);
+                    }
+                }
+
+                // Fallback quest text
+                if (!questData) {
+                    questData = {
+                        title: `Explore ${placeName}`,
+                        description: `Visit ${placeName} near ${area} and discover what makes it special.`,
+                        xpReward: 100,
+                    };
+                }
+
+                return {
+                    title: questData.title,
+                    description: questData.description,
+                    questType: assignedQuestType,
+                    latitude: place.location.latitude,
+                    longitude: place.location.longitude,
+                    xpReward: questData.xpReward || 100,
+                    googlePlaceId: place.id,
+                    locationName: placeName,
+                };
+            });
+
+            const quests = await Promise.all(questPromises);
+            console.log(`[generateCampaignQuests] Returning ${quests.length} real-place quests.`);
+            return { quests };
+        }
+
+        // ── Fallback: No places found, use AI-only generation ──
+        console.warn("[generateCampaignQuests] No places found. Using AI-only fallback.");
+        const fallbackPrompt = `You are a gamified travel app quest generator.
+Generate exactly 3 interesting travel quests themed around ${themeDesc} near "${area}" (coordinates: ${latitude}, ${longitude}).
+Return ONLY a valid JSON object: {"quests":[{"title":"...","description":"...","questType":"exploration","latitude":${latitude},"longitude":${longitude},"xpReward":100}]}
+Rules: Generate EXACTLY 3. questType must be "exploration", "discovery", or "trivia". Coordinates must be realistic near the given location.`;
+
+        const aiText = await generateWithAI(fallbackPrompt, geminiApiKey);
+        if (aiText) {
+            try {
+                const parsed = JSON.parse(aiText);
+                if (parsed.quests && Array.isArray(parsed.quests)) {
+                    return { quests: parsed.quests };
+                }
+            } catch (e) {
+                console.error(`[generateCampaignQuests] AI fallback parse error: ${e.message}`);
+            }
+        }
+
+        // Final hardcoded fallback
+        const fallbackQuests = [
+            { title: `Trail near ${area}`, description: `Discover a scenic trail near ${area}.`, questType: 'exploration', latitude: latitude + 0.005, longitude: longitude + 0.003, xpReward: 120 },
+            { title: `Hidden Spot of ${area}`, description: `Find a secluded gem near ${area}.`, questType: 'discovery', latitude: latitude + 0.008, longitude: longitude - 0.002, xpReward: 100 },
+            { title: `${area} Landmark`, description: `Visit a notable landmark at ${area}.`, questType: 'exploration', latitude: latitude - 0.003, longitude: longitude + 0.006, xpReward: 90 },
+        ];
+        return { quests: fallbackQuests };
+
+    } catch (error) {
+        console.error("generateCampaignQuests error:", error);
+        throw new HttpsError("internal", "Failed to generate campaign quests.", error.message);
     }
 });
