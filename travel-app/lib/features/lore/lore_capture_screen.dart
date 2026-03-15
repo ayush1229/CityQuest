@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -42,7 +43,7 @@ class _LoreCaptureScreenState extends State<LoreCaptureScreen>
   String _locationName = '';
   String _loreDescription = '';
 
-  static const String _mapsApiKey = 'AIzaSyCZ7KPFxLqOCfTPHwumDcZyNpOcYJAHYf8';
+  static String get _mapsApiKey => dotenv.env['MAPS_API_KEY'] ?? '';
 
   late AnimationController _shimmerController;
 

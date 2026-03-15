@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:cityquest/core/theme/app_theme.dart';
 import 'package:cityquest/models/campaign.dart';
 import 'package:cityquest/models/quest_node.dart';
@@ -894,7 +895,7 @@ class _ClassSelectionSheet extends StatefulWidget {
 
 class _ClassSelectionSheetState extends State<_ClassSelectionSheet> {
   late final TextEditingController _areaController;
-  static const String _mapsApiKey = 'AIzaSyCZ7KPFxLqOCfTPHwumDcZyNpOcYJAHYf8';
+  static String get _mapsApiKey => dotenv.env['MAPS_API_KEY'] ?? '';
   List<Map<String, dynamic>> _suggestions = [];
   double? _selectedLat;
   double? _selectedLng;
@@ -1254,7 +1255,7 @@ class _PlaceSearchSheetState extends State<_PlaceSearchSheet> {
   List<Map<String, dynamic>> _suggestions = [];
   List<QuestNode> _nearbySuggestions = [];
   bool _isSearching = false;
-  static const String _mapsApiKey = 'AIzaSyCZ7KPFxLqOCfTPHwumDcZyNpOcYJAHYf8';
+  static String get _mapsApiKey => dotenv.env['MAPS_API_KEY'] ?? '';
 
   @override
   void initState() {

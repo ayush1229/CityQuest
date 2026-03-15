@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -43,7 +44,7 @@ class _MapScreenState extends State<MapScreen> {
 
   // Background POI markers (low zIndex, scenery)
   final Set<Marker> _poiMarkers = {};
-  static const String _mapsApiKey = 'AIzaSyCZ7KPFxLqOCfTPHwumDcZyNpOcYJAHYf8';
+  static String get _mapsApiKey => dotenv.env['MAPS_API_KEY'] ?? '';
   double _lastPoiRadius = 0;
 
   // POI filter state

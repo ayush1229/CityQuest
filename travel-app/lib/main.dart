@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cityquest/core/theme/app_theme.dart';
 import 'package:cityquest/providers/location_provider.dart';
@@ -14,6 +15,7 @@ import 'package:cityquest/firebase_options.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
 
   // Initialize Firebase (will fail gracefully if not configured)
   try {

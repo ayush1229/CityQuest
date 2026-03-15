@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -29,7 +30,7 @@ class PoiDetailSheet extends StatefulWidget {
 }
 
 class _PoiDetailSheetState extends State<PoiDetailSheet> {
-  static const String _mapsApiKey = 'AIzaSyCZ7KPFxLqOCfTPHwumDcZyNpOcYJAHYf8';
+  static String get _mapsApiKey => dotenv.env['MAPS_API_KEY'] ?? '';
   _PoiData? _poiData;
   bool _isLoading = true;
   String? _error;
