@@ -1460,6 +1460,70 @@ class _MapScreenState extends State<MapScreen> {
                 ),
               ),
             ),
+
+            // ── Forge Progress Banner ──
+            if (campaignProvider.isForging || campaignProvider.forgeStatusMessage.isNotEmpty)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 8,
+                left: 16,
+                right: 16,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.cardDark.withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppTheme.accentGold.withValues(alpha: 0.4)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.accentGold.withValues(alpha: 0.15),
+                        blurRadius: 12,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          if (campaignProvider.isForging)
+                            const SizedBox(
+                              width: 18, height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppTheme.accentGold,
+                              ),
+                            )
+                          else
+                            const Icon(Icons.check_circle, color: Colors.green, size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              campaignProvider.forgeStatusMessage,
+                              style: const TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (campaignProvider.isForging && campaignProvider.forgeTotal > 0) ...[
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: campaignProvider.forgeProgress / campaignProvider.forgeTotal,
+                            minHeight: 4,
+                            backgroundColor: Colors.white10,
+                            valueColor: const AlwaysStoppedAnimation(AppTheme.accentGold),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
           ],
         );
       },

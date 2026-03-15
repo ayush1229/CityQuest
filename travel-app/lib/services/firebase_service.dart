@@ -264,4 +264,47 @@ class FirebaseService {
       return null;
     }
   }
+
+  /// Save campaign quest nodes directly to the user's active_quests subcollection
+  /// WITHOUT clearing existing quests (unlike generateQuest Cloud Function).
+  Future<void> saveCampaignQuestsToFirestore(List<QuestNode> quests) async {
+    if (!isInitialized) return;
+    final user = currentUser;
+    if (user == null) return;
+
+    final batch = FirebaseFirestore.instance.batch();
+    final activeQuestsRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('active_quests');
+
+    for (final quest in quests) {
+      final docRef = activeQuestsRef.doc(quest.id);
+      final payload = <String, dynamic>{
+        'location_id': quest.id,
+        'quest_type': quest.questType,
+        'title': quest.title,
+        'xp_reward': quest.xpReward,
+        'location_lat': quest.latitude,
+        'location_lng': quest.longitude,
+        'location_name': quest.title,
+        'is_main_quest': true,
+        'timestamp': FieldValue.serverTimestamp(),
+      };
+
+      if (quest.questType == 'trivia') {
+        payload['question'] = quest.question;
+        payload['options'] = quest.options;
+      } else if (quest.questType == 'exploration') {
+        payload['description'] = quest.description;
+      } else if (quest.questType == 'discovery') {
+        payload['unlocked_lore'] = quest.unlockedLore;
+        payload['description'] = quest.description;
+      }
+
+      batch.set(docRef, payload);
+    }
+
+    await batch.commit();
+  }
 }

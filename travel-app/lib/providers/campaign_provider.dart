@@ -6,6 +6,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cityquest/models/campaign.dart';
 import 'package:cityquest/models/quest_node.dart';
+import 'package:cityquest/services/firebase_service.dart';
 
 class CampaignProvider extends ChangeNotifier {
   Campaign? _activeCampaign;
@@ -20,6 +21,17 @@ class CampaignProvider extends ChangeNotifier {
   List<Campaign> get campaigns => _campaigns;
   bool get isLoading => _isLoading;
   String? get error => _error;
+
+  // ─── Forge Progress State ───
+  bool _isForging = false;
+  int _forgeProgress = 0;
+  int _forgeTotal = 0;
+  String _forgeStatusMessage = '';
+
+  bool get isForging => _isForging;
+  int get forgeProgress => _forgeProgress;
+  int get forgeTotal => _forgeTotal;
+  String get forgeStatusMessage => _forgeStatusMessage;
 
   // ─── Draft Auto-Save ───
 
@@ -164,8 +176,12 @@ class CampaignProvider extends ChangeNotifier {
     }
     globalOrder += _activeCampaign!.levels[levelIndex].destinations.length;
 
+    // Alternate between discovery and exploration for main quests
+    final isEven = globalOrder % 2 == 0;
+    
     final taggedQuest = quest.copyWith(
       isMainQuest: true,
+      questType: isEven ? 'discovery' : 'exploration',
       orderIndex: globalOrder,
     );
 
@@ -215,8 +231,10 @@ class CampaignProvider extends ChangeNotifier {
     if (_activeCampaign == null) return;
     final levels = _activeCampaign!.levels.map((l) => l.copyWith()).toList();
     if (levelIndex < levels.length && questIndex < levels[levelIndex].destinations.length) {
+      final isEven = levels[levelIndex].destinations[questIndex].orderIndex % 2 == 0;
       final tagged = newQuest.copyWith(
         isMainQuest: true,
+        questType: isEven ? 'discovery' : 'exploration',
         orderIndex: levels[levelIndex].destinations[questIndex].orderIndex,
       );
       levels[levelIndex].destinations[questIndex] = tagged;
@@ -394,6 +412,74 @@ class CampaignProvider extends ChangeNotifier {
     }
 
     _isLoading = false;
+    notifyListeners();
+  }
+
+  /// Forge campaign AND save campaign quests to Firestore in batches.
+  /// [onQuestsGenerated] is called as each batch of quests is saved
+  /// so they can be injected into the map immediately.
+  static const int _batchSize = 3;
+
+  Future<void> forgeCampaignWithQuests({
+    required void Function(List<QuestNode> quests) onQuestsGenerated,
+  }) async {
+    if (_activeCampaign == null) return;
+
+    // 1. Save campaign metadata to Firestore
+    await forgeCampaign();
+    if (_error != null) return;
+
+    // 2. Collect all destinations
+    final allDests = _activeCampaign!.allMainQuests;
+    if (allDests.isEmpty) return;
+
+    _isForging = true;
+    _forgeProgress = 0;
+    _forgeTotal = allDests.length;
+    _forgeStatusMessage = 'Forging quests... (0/${allDests.length})';
+    notifyListeners();
+
+    final firebaseService = FirebaseService();
+
+    // 3. Save in batches directly to Firestore active_quests
+    for (int i = 0; i < allDests.length; i += _batchSize) {
+      final batchEnd = (i + _batchSize).clamp(0, allDests.length);
+      final batch = allDests.sublist(i, batchEnd);
+
+      // Ensure each quest has a proper non-trivia type and isMainQuest
+      final taggedBatch = batch.map((dest) {
+        final type = dest.questType == 'trivia' ? 'discovery' : dest.questType;
+        return dest.copyWith(
+          isMainQuest: true,
+          questType: type,
+          description: dest.description.isNotEmpty
+              ? dest.description
+              : 'Explore this legendary location and uncover its secrets.',
+        );
+      }).toList();
+
+      try {
+        // Save directly to Firestore (no destructive clear)
+        await firebaseService.saveCampaignQuestsToFirestore(taggedBatch);
+      } catch (e) {
+        debugPrint('[Forge] Failed to save batch to Firestore: $e');
+      }
+
+      // Update progress
+      _forgeProgress = batchEnd;
+      _forgeStatusMessage = 'Forging quests... ($batchEnd/${allDests.length})';
+      notifyListeners();
+
+      // Inject this batch into the map immediately
+      onQuestsGenerated(taggedBatch);
+    }
+
+    _isForging = false;
+    _forgeStatusMessage = 'All quests forged!';
+    notifyListeners();
+
+    await Future.delayed(const Duration(seconds: 2));
+    _forgeStatusMessage = '';
     notifyListeners();
   }
 

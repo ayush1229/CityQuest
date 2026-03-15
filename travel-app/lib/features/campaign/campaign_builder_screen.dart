@@ -7,6 +7,7 @@ import 'package:cityquest/models/campaign.dart';
 import 'package:cityquest/models/quest_node.dart';
 import 'package:cityquest/providers/campaign_provider.dart';
 import 'package:cityquest/providers/location_provider.dart';
+import 'package:cityquest/providers/quest_provider.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
@@ -264,12 +265,41 @@ class _CampaignBuilderScreenState extends State<CampaignBuilderScreen> {
       return;
     }
 
-    await provider.forgeCampaign();
+    final activeCampaign = provider.activeCampaign!;
+    final questProvider = context.read<QuestProvider>();
+    final firstDest = activeCampaign.levels.isNotEmpty &&
+            activeCampaign.levels[0].destinations.isNotEmpty
+        ? activeCampaign.levels[0].destinations[0]
+        : null;
+
+    // Show brief "Forging..." animation via the existing loading overlay
+    // The loading overlay is already in the build tree (lines 389-410)
+    // forgeCampaignWithQuests sets isLoading during Firestore save
+
+    // Start the background process — don't await the full thing
+    // This fires and forgets: saves to Firestore, then generates AI quests
+    provider.forgeCampaignWithQuests(
+      onQuestsGenerated: (quests) {
+        // Inject each batch of generated quests into the map
+        questProvider.loadCampaignQuests(quests);
+      },
+    );
+
+    // Show the snackbar and pop immediately after a brief delay
+    // so the user sees the "Consulting the Oracle" animation
+    await Future.delayed(const Duration(milliseconds: 1500));
+
     if (mounted) {
+      // Focus the map on the first destination
+      if (firstDest != null) {
+        provider.focusQuestCallback?.call(firstDest);
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('⚔️ Campaign forged! Your quest awaits on the map.'),
+          content: Text('⚔️ Campaign forged! Quests are being summoned in the background...'),
           backgroundColor: AppTheme.cardDark,
+          duration: Duration(seconds: 4),
         ),
       );
       Navigator.pop(context);

@@ -9,30 +9,93 @@ import 'package:cityquest/providers/lore_provider.dart';
 import 'package:cityquest/providers/user_provider.dart';
 
 // ──────────────────────────────────────────
-//  Badge Model
+//  Achievement Badge Model
 // ──────────────────────────────────────────
 
-class BadgeModel {
+class AchievementBadge {
   final String id;
   final String title;
   final String description;
   final IconData icon;
-  final bool isUnlocked;
-  final double progress; // 0.0 – 1.0
-  final String progressLabel; // e.g. "1/3"
+  final int maxProgress;
+  final int currentProgress;
   final Color color;
 
-  const BadgeModel({
+  const AchievementBadge({
     required this.id,
     required this.title,
     required this.description,
     required this.icon,
-    this.isUnlocked = false,
-    this.progress = 0.0,
-    this.progressLabel = '',
+    required this.maxProgress,
+    this.currentProgress = 0,
     this.color = AppTheme.accentGold,
   });
+
+  bool get isUnlocked => currentProgress >= maxProgress;
+  double get progress => maxProgress > 0 ? (currentProgress / maxProgress).clamp(0.0, 1.0) : 0.0;
+  String get progressLabel => '$currentProgress / $maxProgress';
 }
+
+// ──────────────────────────────────────────
+//  Mock Achievement Data
+// ──────────────────────────────────────────
+
+const List<AchievementBadge> kMockAchievements = [
+  AchievementBadge(
+    id: 'first_steps',
+    title: 'First Steps',
+    description: 'Walk 1km with the app',
+    icon: Icons.directions_walk,
+    maxProgress: 1,
+    currentProgress: 1,
+    color: Color(0xFF66BB6A),
+  ),
+  AchievementBadge(
+    id: 'tavern_regular',
+    title: 'Tavern Regular',
+    description: 'Visit 5 Cafes',
+    icon: Icons.local_cafe,
+    maxProgress: 5,
+    currentProgress: 5,
+    color: Color(0xFFFFCA28),
+  ),
+  AchievementBadge(
+    id: 'scribe_apprentice',
+    title: "Scribe's Apprentice",
+    description: 'Capture 1 Lore Photo',
+    icon: Icons.menu_book,
+    maxProgress: 1,
+    currentProgress: 1,
+    color: Color(0xFF7C4DFF),
+  ),
+  AchievementBadge(
+    id: 'scholar_academy',
+    title: 'Scholar of the Academy',
+    description: 'Visit 3 Universities',
+    icon: Icons.school,
+    maxProgress: 3,
+    currentProgress: 2,
+    color: Color(0xFF29B6F6),
+  ),
+  AchievementBadge(
+    id: 'artifact_hunter',
+    title: 'Artifact Hunter',
+    description: 'Catch 5 AR Objects',
+    icon: Icons.camera_alt,
+    maxProgress: 5,
+    currentProgress: 1,
+    color: Color(0xFFFF7043),
+  ),
+  AchievementBadge(
+    id: 'guild_master',
+    title: 'Master of the Guild',
+    description: 'Complete 100 Quests',
+    icon: Icons.emoji_events,
+    maxProgress: 100,
+    currentProgress: 12,
+    color: Color(0xFFAB47BC),
+  ),
+];
 
 // ──────────────────────────────────────────
 //  Achievements Screen
@@ -48,69 +111,6 @@ class AchievementsScreen extends StatefulWidget {
 class _AchievementsScreenState extends State<AchievementsScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-
-  static const List<BadgeModel> _badges = [
-    BadgeModel(
-      id: 'first_steps',
-      title: 'First Steps',
-      description: 'Reach Level 2',
-      icon: Icons.directions_walk,
-      isUnlocked: true,
-      progress: 1.0,
-      progressLabel: '2/2',
-      color: Color(0xFF66BB6A),
-    ),
-    BadgeModel(
-      id: 'scholar',
-      title: 'Scholar of the Ancients',
-      description: 'Collect 5 Lore Entries',
-      icon: Icons.auto_stories,
-      isUnlocked: true,
-      progress: 1.0,
-      progressLabel: '5/5',
-      color: Color(0xFF7C4DFF),
-    ),
-    BadgeModel(
-      id: 'hidden_seeker',
-      title: 'Hidden Seeker',
-      description: 'Find 3 secret locations',
-      icon: Icons.explore,
-      isUnlocked: false,
-      progress: 0.33,
-      progressLabel: '1/3',
-      color: Color(0xFF29B6F6),
-    ),
-    BadgeModel(
-      id: 'world_traveler',
-      title: 'World Traveler',
-      description: 'Walk 10km with the app',
-      icon: Icons.public,
-      isUnlocked: false,
-      progress: 0.42,
-      progressLabel: '4.2/10 km',
-      color: Color(0xFFFF7043),
-    ),
-    BadgeModel(
-      id: 'tavern_master',
-      title: 'Tavern Master',
-      description: 'Visit 5 Restaurants/Cafes',
-      icon: Icons.restaurant,
-      isUnlocked: true,
-      progress: 1.0,
-      progressLabel: '5/5',
-      color: Color(0xFFFFCA28),
-    ),
-    BadgeModel(
-      id: 'artifact_hunter',
-      title: 'Artifact Hunter',
-      description: 'Capture 10 AR Artifacts',
-      icon: Icons.camera_alt,
-      isUnlocked: false,
-      progress: 0.2,
-      progressLabel: '2/10',
-      color: Color(0xFFAB47BC),
-    ),
-  ];
 
   @override
   void initState() {
@@ -527,7 +527,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
   // ══════════════════════════════════════════
 
   Widget _buildAchievementsTab() {
-    final unlockedCount = _badges.where((b) => b.isUnlocked).length;
+    final unlockedCount = kMockAchievements.where((b) => b.isUnlocked).length;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -545,7 +545,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
             children: [
               const Icon(Icons.emoji_events, color: AppTheme.accentGold, size: 20),
               const SizedBox(width: 10),
-              Text('$unlockedCount / ${_badges.length} Unlocked',
+              Text('$unlockedCount / ${kMockAchievements.length} Unlocked',
                 style: GoogleFonts.montserrat(
                   color: AppTheme.textPrimary,
                   fontSize: 14,
@@ -568,17 +568,25 @@ class _AchievementsScreenState extends State<AchievementsScreen>
             crossAxisSpacing: 12,
             childAspectRatio: 0.85,
           ),
-          itemCount: _badges.length,
-          itemBuilder: (context, index) => _buildBadgeCard(_badges[index], index),
+          itemCount: kMockAchievements.length,
+          itemBuilder: (context, index) => _buildBadgeCard(kMockAchievements[index], index),
         ),
       ],
     );
   }
 
-  Widget _buildBadgeCard(BadgeModel badge, int index) {
+  Widget _buildBadgeCard(AchievementBadge badge, int index) {
     final unlocked = badge.isUnlocked;
 
-    return Container(
+    // Grayscale matrix for locked badges
+    const grayscaleMatrix = ColorFilter.matrix(<double>[
+      0.2126, 0.7152, 0.0722, 0, 0,
+      0.2126, 0.7152, 0.0722, 0, 0,
+      0.2126, 0.7152, 0.0722, 0, 0,
+      0,      0,      0,      1, 0,
+    ]);
+
+    Widget card = Container(
       decoration: BoxDecoration(
         color: AppTheme.cardDark,
         borderRadius: BorderRadius.circular(18),
@@ -587,7 +595,10 @@ class _AchievementsScreenState extends State<AchievementsScreen>
           width: unlocked ? 1.5 : 1,
         ),
         boxShadow: unlocked
-            ? [BoxShadow(color: badge.color.withOpacity(0.15), blurRadius: 16)]
+            ? [
+                BoxShadow(color: AppTheme.accentGold.withOpacity(0.2), blurRadius: 20, spreadRadius: 1),
+                BoxShadow(color: badge.color.withOpacity(0.15), blurRadius: 12),
+              ]
             : [],
       ),
       child: Stack(
@@ -627,7 +638,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                     ),
                   ),
                   child: Icon(
-                    unlocked ? badge.icon : Icons.lock,
+                    badge.icon,
                     color: unlocked ? badge.color : AppTheme.lockedGrey,
                     size: 26,
                   ),
@@ -667,7 +678,7 @@ class _AchievementsScreenState extends State<AchievementsScreen>
                   borderRadius: BorderRadius.circular(4),
                   child: LinearProgressIndicator(
                     value: badge.progress,
-                    minHeight: 4,
+                    minHeight: 5,
                     backgroundColor: Colors.white.withOpacity(0.05),
                     valueColor: AlwaysStoppedAnimation(
                       unlocked ? badge.color : AppTheme.lockedGrey,
@@ -688,16 +699,41 @@ class _AchievementsScreenState extends State<AchievementsScreen>
             ),
           ),
 
-          // Unlocked glow shimmer
+          // Unlocked: verified badge
           if (unlocked)
             Positioned(
               top: 8,
               right: 8,
               child: Icon(Icons.verified, color: badge.color, size: 16),
             ),
+
+          // Locked: padlock overlay
+          if (!unlocked)
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.5),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.lock, color: AppTheme.lockedGrey, size: 12),
+              ),
+            ),
         ],
       ),
-    ).animate().fadeIn(
+    );
+
+    // Wrap locked badges with grayscale + reduced opacity
+    if (!unlocked) {
+      card = ColorFiltered(
+        colorFilter: grayscaleMatrix,
+        child: Opacity(opacity: 0.5, child: card),
+      );
+    }
+
+    return card.animate().fadeIn(
       delay: Duration(milliseconds: 100 * index),
       duration: 350.ms,
     ).scale(begin: const Offset(0.9, 0.9), end: const Offset(1, 1));

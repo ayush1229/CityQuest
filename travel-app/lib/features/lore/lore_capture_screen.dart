@@ -28,10 +28,14 @@ class LoreCaptureScreen extends StatefulWidget {
 class _LoreCaptureScreenState extends State<LoreCaptureScreen>
     with SingleTickerProviderStateMixin {
   CameraController? _cameraController;
+  List<CameraDescription> _cameras = [];
+  int _currentCameraIndex = 0;
   bool _cameraReady = false;
   bool _photoTaken = false;
   bool _fetchingLore = false;
   bool _loreReady = false;
+  bool _loreFetched = false; // true if Places API returned actual lore
+  bool _takenWithFrontCamera = false;
   String? _photoPath;
 
   // Fetched lore data
@@ -54,18 +58,33 @@ class _LoreCaptureScreenState extends State<LoreCaptureScreen>
 
   Future<void> _initCamera() async {
     try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) return;
-      final rear = cameras.firstWhere(
+      _cameras = await availableCameras();
+      if (_cameras.isEmpty) return;
+      // Start with rear camera
+      _currentCameraIndex = _cameras.indexWhere(
         (c) => c.lensDirection == CameraLensDirection.back,
-        orElse: () => cameras.first,
       );
-      _cameraController = CameraController(rear, ResolutionPreset.high, enableAudio: false);
-      await _cameraController!.initialize();
-      if (mounted) setState(() => _cameraReady = true);
+      if (_currentCameraIndex < 0) _currentCameraIndex = 0;
+      await _startCamera(_cameras[_currentCameraIndex]);
     } catch (e) {
       debugPrint('[LoreCapture] Camera init error: $e');
     }
+  }
+
+  Future<void> _startCamera(CameraDescription camera) async {
+    if (_cameraController != null) {
+      await _cameraController!.dispose();
+    }
+    setState(() => _cameraReady = false);
+    _cameraController = CameraController(camera, ResolutionPreset.high, enableAudio: false);
+    await _cameraController!.initialize();
+    if (mounted) setState(() => _cameraReady = true);
+  }
+
+  void _flipCamera() {
+    if (_cameras.length < 2) return;
+    _currentCameraIndex = (_currentCameraIndex + 1) % _cameras.length;
+    _startCamera(_cameras[_currentCameraIndex]);
   }
 
   Future<void> _takePhoto() async {
@@ -73,10 +92,12 @@ class _LoreCaptureScreenState extends State<LoreCaptureScreen>
 
     try {
       final xFile = await _cameraController!.takePicture();
+      final isFront = _cameras[_currentCameraIndex].lensDirection == CameraLensDirection.front;
       setState(() {
         _photoPath = xFile.path;
         _photoTaken = true;
         _fetchingLore = true;
+        _takenWithFrontCamera = isFront;
       });
 
       // Fetch lore from Google Places
@@ -134,10 +155,12 @@ class _LoreCaptureScreenState extends State<LoreCaptureScreen>
           final editorial = place['editorialSummary']?['text'];
           if (editorial != null && editorial.isNotEmpty) {
             _loreDescription = editorial;
+            _loreFetched = true;
           } else {
             final reviews = place['reviews'] as List<dynamic>? ?? [];
             if (reviews.isNotEmpty) {
               _loreDescription = reviews[0]['text']?['text'] ?? '';
+              _loreFetched = true;
             }
           }
         }
@@ -191,7 +214,11 @@ class _LoreCaptureScreenState extends State<LoreCaptureScreen>
           // ── Camera / Photo Preview ──
           if (_photoTaken && _photoPath != null)
             Positioned.fill(
-              child: Image.file(File(_photoPath!), fit: BoxFit.cover),
+              child: Transform(
+                alignment: Alignment.center,
+                transform: Matrix4.identity()..scale(_takenWithFrontCamera ? -1.0 : 1.0, 1.0),
+                child: Image.file(File(_photoPath!), fit: BoxFit.cover),
+              ),
             )
           else if (_cameraReady && _cameraController != null)
             Positioned.fill(
@@ -344,34 +371,54 @@ class _LoreCaptureScreenState extends State<LoreCaptureScreen>
               child: _buildLoreResultCard(),
             ),
 
-          // ── Capture button (before photo) ──
+          // ── Capture button + camera flip (before photo) ──
           if (!_photoTaken)
             Positioned(
               bottom: 40,
               left: 0,
               right: 0,
-              child: Center(
-                child: GestureDetector(
-                  onTap: _takePhoto,
-                  child: Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 4),
-                    ),
-                    child: Center(
-                      child: Container(
-                        width: 64,
-                        height: 64,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(width: 64), // spacer for symmetry
+                  GestureDetector(
+                    onTap: _takePhoto,
+                    child: Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 4),
+                      ),
+                      child: Center(
+                        child: Container(
+                          width: 64,
+                          height: 64,
+                          decoration: const BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
+                  const SizedBox(width: 20),
+                  // Camera flip button
+                  if (_cameras.length >= 2)
+                    GestureDetector(
+                      onTap: _flipCamera,
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withOpacity(0.15),
+                          border: Border.all(color: Colors.white30),
+                        ),
+                        child: const Icon(Icons.cameraswitch_rounded, color: Colors.white, size: 22),
+                      ),
+                    ),
+                ],
               ),
             ),
         ],
@@ -398,22 +445,23 @@ class _LoreCaptureScreenState extends State<LoreCaptureScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Lore discovered banner
+          // Lore discovered / Memory captured banner
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: AppTheme.accentGold.withOpacity(0.15),
+              color: (_loreFetched ? AppTheme.accentGold : Colors.green).withOpacity(0.15),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppTheme.accentGold.withOpacity(0.3)),
+              border: Border.all(color: (_loreFetched ? AppTheme.accentGold : Colors.green).withOpacity(0.3)),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.auto_stories, color: AppTheme.accentGold, size: 16),
+                Icon(_loreFetched ? Icons.auto_stories : Icons.photo_camera,
+                  color: _loreFetched ? AppTheme.accentGold : Colors.green, size: 16),
                 const SizedBox(width: 6),
-                Text('LORE DISCOVERED',
+                Text(_loreFetched ? 'LORE DISCOVERED' : 'MEMORY CAPTURED',
                   style: GoogleFonts.montserrat(
-                    color: AppTheme.accentGold,
+                    color: _loreFetched ? AppTheme.accentGold : Colors.green,
                     fontSize: 11,
                     fontWeight: FontWeight.w800,
                     letterSpacing: 1.5,
@@ -425,26 +473,38 @@ class _LoreCaptureScreenState extends State<LoreCaptureScreen>
 
           const SizedBox(height: 12),
 
-          Text(_locationName,
-            style: GoogleFonts.montserrat(
-              color: AppTheme.textPrimary,
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-            ),
-          ).animate().fadeIn(delay: 200.ms, duration: 400.ms),
-
-          const SizedBox(height: 8),
-
-          Text(_loreDescription,
-            maxLines: 4,
-            overflow: TextOverflow.ellipsis,
+          // Date / Time stamp (always shown)
+          Text(DateFormat('d MMM yyyy, h:mm a').format(DateTime.now()),
             style: GoogleFonts.poppins(
-              color: AppTheme.textSecondary,
-              fontSize: 13,
-              height: 1.5,
-              fontStyle: FontStyle.italic,
+              color: Colors.white38,
+              fontSize: 12,
             ),
-          ).animate().fadeIn(delay: 400.ms, duration: 400.ms),
+          ).animate().fadeIn(delay: 100.ms, duration: 300.ms),
+
+          if (_loreFetched) ...[
+            const SizedBox(height: 8),
+
+            Text(_locationName,
+              style: GoogleFonts.montserrat(
+                color: AppTheme.textPrimary,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ).animate().fadeIn(delay: 200.ms, duration: 400.ms),
+
+            const SizedBox(height: 8),
+
+            Text(_loreDescription,
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.poppins(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+                height: 1.5,
+                fontStyle: FontStyle.italic,
+              ),
+            ).animate().fadeIn(delay: 400.ms, duration: 400.ms),
+          ],
 
           const SizedBox(height: 20),
 

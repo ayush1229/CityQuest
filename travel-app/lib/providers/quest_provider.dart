@@ -139,4 +139,17 @@ class QuestProvider extends ChangeNotifier {
       return [];
     }
   }
+
+  /// Inject campaign quests into the active map session.
+  void loadCampaignQuests(List<QuestNode> campaignQuests) {
+    // Optionally clear existing AI side-quests or just append
+    // Here we append so users can still do side quests alongside the campaign
+    final existingIds = _quests.map((q) => q.id).toSet();
+    final newQuests = campaignQuests.where((q) => !existingIds.contains(q.id)).toList();
+    
+    _quests.addAll(newQuests);
+    _activeQuest = null;
+    _routePoints = [];
+    notifyListeners();
+  }
 }
